@@ -17,6 +17,9 @@ jobs:
 
         runs-on: ubuntu-latest
 
+        permissions:
+            id-token: write
+
         steps:
             - uses: actions/checkout@v6
               with:
@@ -38,4 +41,3 @@ jobs:
                   user: __token__
                   password: ${{ secrets.TEST_PYPI_TOKEN }}
                   repository-url: https://test.pypi.org/legacy/
-                  attestations: false

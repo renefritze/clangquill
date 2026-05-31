@@ -14,6 +14,9 @@ jobs:
 
         runs-on: ubuntu-latest
 
+        permissions:
+            id-token: write
+
         steps:
             - uses: actions/checkout@v6
             - name: Set up Python
@@ -30,7 +33,6 @@ jobs:
               with:
                   user: __token__
                   password: ${{ secrets.PYPI_TOKEN }}
-                  attestations: false
     github:
         name: Create Release
         runs-on: ubuntu-latest
