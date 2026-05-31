@@ -17,10 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         config:
-        - {os: ubuntu-22.04, py: '3.10'}
-        - {os: ubuntu-22.04, py: '3.11'}
-        - {os: ubuntu-22.04, py: '3.12'}
-        - {os: ubuntu-22.04, py: '3.13'}
+        - {os: ubuntu-24.04, py: '3.13'}
 
     env:
       OS: ${{ matrix.config.os }}
