@@ -14,34 +14,28 @@ extend-ignore = ["E501", "ANN201", "ANN001", "D211", "D213"]
 addopts = "--cov=clangquill --cov-report=term-missing"
 
 
-[tool.hatch]
-
-[tool.hatch.metadata]
-allow-direct-references = true
-
-[tool.hatch.version]
-source = "vcs"
-fallback-version = "0.0.0"
-
-[tool.hatch.build.hooks.vcs]
-version-file = "src/clangquill/_version.py"
-
-[tool.hatch.envs.default]
-python = "3.11"
-
-[tool.hatch.envs.default.scripts]
-test = "pytest"
-lint = [
-  "ruff format .",
-  "ruff check --fix .",
-  "ty check src/clangquill/",
-]
-
-docs-build = "make -C docs html"
-
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
-build-backend = "hatchling.build"
+requires = ["scikit-build-core>=0.10", "nanobind>=2.0", "setuptools_scm>=8"]
+build-backend = "scikit_build_core.build"
+
+[tool.scikit-build]
+# scikit-build-core ships its own cmake/ninja wheels when the system ones are
+# missing or too old, so no extra system setup is required to build.
+minimum-version = "build-system.requires"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["src/clangquill"]
+sdist.exclude = [".github", "docs/_build"]
+
+[tool.scikit-build.cmake.define]
+# libclang linkage is optional in M1 so the manylinux wheel build is decoupled
+# from the libclang-sourcing spike (#4). CMake auto-detects it when present.
+CLANGQUILL_WITH_LIBCLANG = "AUTO"
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.setuptools_scm"
+
+[tool.setuptools_scm]
+fallback_version = "0.0.0"
 
 [project]
 name = "clangquill"

@@ -13,6 +13,22 @@ Features
 
 -   TODO
 
+Building from source
+--------------------
+
+`clangquill` ships a compiled C++ core (`clangquill._core`) built with
+[scikit-build-core](https://scikit-build-core.readthedocs.io/), CMake and
+[nanobind](https://nanobind.readthedocs.io/). A standard install builds it:
+
+```console
+$ pip install .
+$ python -c "from clangquill import _core; print(_core.have_libclang())"
+```
+
+The core optionally links **libclang**; when `libclang-dev` (or an LLVM prefix
+via `LibClang_ROOT`) is available at build time the extraction backend is
+enabled. Pass `-DCLANGQUILL_WITH_LIBCLANG=ON` to require it.
+
 After generating your project
 -----------------------------
 

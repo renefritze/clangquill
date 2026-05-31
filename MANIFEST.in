@@ -8,6 +8,8 @@ recursive-exclude * __pycache__
 recursive-exclude * *.py[co]
 
 recursive-include docs *.rst *.md conf.py Makefile make.bat *.jpg *.png *.gif
-include versioneer.py
-include dependencies.py
-include src/clangquill/_version.py
+
+# The C++ core is needed to build the extension from an sdist.
+include CMakeLists.txt
+recursive-include cmake *.cmake
+recursive-include src/cpp *.cpp *.hpp

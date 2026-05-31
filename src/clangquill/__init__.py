@@ -1,12 +1,13 @@
 """Top-level package for clangquill."""
 
-__author__ = """ René Fritze"""
-__email__ = " rene@fritze.me"
+from importlib.metadata import PackageNotFoundError, version
+
+__author__ = "René Fritze"
+__email__ = "rene@fritze.me"
 
 try:
-    from . import _version
-
-    __version__ = _version.__version__
-except ImportError as e:
-    print(f"version file could not be imported: {e}")  #  noqa: T201
+    __version__ = version("clangquill")
+except PackageNotFoundError:  # package is not installed
     __version__ = "unknown"
+
+__all__ = ["__version__"]
