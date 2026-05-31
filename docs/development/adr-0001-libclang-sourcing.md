@@ -13,7 +13,8 @@ build cost.
 Candidates considered:
 
 1. **Distro / system libclang** (e.g. `libclang-dev` on the build image).
-2. **Official LLVM release tarball** (`clang+llvm-*-x86_64-linux-gnu`).
+2. **Official LLVM release tarball** (`clang+llvm-*-<arch>-linux-gnu`, e.g.
+   `x86_64` and `aarch64`).
 3. **vcpkg `llvm` port.**
 4. **The PyPI `libclang` wheel**, which ships a prebuilt, self-contained
    `libclang.so`.
@@ -79,9 +80,13 @@ needed.
 
 * `cmake/FindLibClang.cmake` needs the `clang-c/Index.h` headers available at
   build time. The PyPI `libclang` wheel ships the `.so` but **not** the
-  headers, so CI must also provide headers (from the matching LLVM release
-  tarball, or a pinned vendored copy). This is wired up in the M2 build, not
-  M1 (M1 deliberately keeps libclang linkage optional).
+  headers. To preserve the download-size/speed win of the PyPI wheel, CI should
+  obtain headers cheaply — **preferably a pinned, vendored copy of the
+  `clang-c` headers in the repo** (they are small and stable across patch
+  releases), or by downloading only those headers from the LLVM repository —
+  rather than pulling the full LLVM release tarball just for headers. This is
+  wired up in the M2 build, not M1 (M1 deliberately keeps libclang linkage
+  optional).
 * `cibuildwheel` `CIBW_BEFORE_ALL` will fetch + unpack libclang and export
   `LibClang_ROOT`; `CLANGQUILL_WITH_LIBCLANG=ON` is set so a missing libclang
   fails the build loudly rather than silently producing the stub backend.
