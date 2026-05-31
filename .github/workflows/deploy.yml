@@ -26,10 +26,11 @@ jobs:
                   pip install setuptools wheel build
                   python -m build --sdist --wheel --outdir dist/
             - name: Publish distribution 📦 to PyPI
-              uses: pypa/gh-action-pypi-publish@master
+              uses: pypa/gh-action-pypi-publish@release/v1
               with:
                   user: __token__
                   password: ${{ secrets.PYPI_TOKEN }}
+                  attestations: false
     github:
         name: Create Release
         runs-on: ubuntu-latest
