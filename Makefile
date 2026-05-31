@@ -7,7 +7,7 @@ include $(ENV_FILE)
 export $(shell sed 's/=.*//' $(ENV_FILE))
 endif
 
-.PHONY:  deps format docs
+.PHONY:  deps format docs cpp-test
 
 deps:
 	./dependencies.py
@@ -18,3 +18,12 @@ format:
 
 docs:
 	make -C docs html
+
+# Configure, build and run the C++ Catch2 tests. Requires libclang-dev,
+# libsqlite3-dev, nlohmann-json3-dev and catch2 (or a vcpkg toolchain).
+cpp-test:
+	cmake -S . -B build-cpp -G Ninja \
+		-DCLANGQUILL_WITH_LIBCLANG=ON -DCLANGQUILL_BUILD_TESTS=ON \
+		-DPython_EXECUTABLE=$$(which python3)
+	cmake --build build-cpp
+	ctest --test-dir build-cpp --output-on-failure
