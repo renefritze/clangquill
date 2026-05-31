@@ -104,3 +104,6 @@ ENV/
 # IDE settings
 .vscode/.idea
 .idea
+
+# hatch-vcs generated version file
+src/clangquill/_version.py

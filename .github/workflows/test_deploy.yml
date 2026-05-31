@@ -1,10 +1,16 @@
 ---
-# This workflow will upload a Python Package using Twine when a release is created
-# For more information see: https://help.github.com/en/actions/language-and-framework-guides/using-python-with-github-actions#publishing-to-package-registries
+# Build the package on every PR; publish to Test PyPI only on pushes to main or
+# version tags (so PRs verify the build without needing a publish token).
 
-name: Upload Python Package
+name: test-deploy
 
-on: [pull_request]
+on:
+    pull_request:
+    push:
+        branches:
+            - main
+        tags:
+            - v*
 
 jobs:
     deploy:
@@ -12,22 +18,23 @@ jobs:
         runs-on: ubuntu-latest
 
         steps:
-            - uses: actions/checkout@v2
+            - uses: actions/checkout@v4
               with:
-        # to guarantee proper versioneer pickup of last tag
+                  # to guarantee proper hatch-vcs pickup of the last tag
                   fetch-depth: 0
             - name: Set up Python
-              uses: actions/setup-python@v2
+              uses: actions/setup-python@v5
               with:
                   python-version: 3.x
             - name: Build dist artefacts
               run: |
                   python -m pip install --upgrade pip
-                  pip install setuptools wheel build
+                  pip install build
                   python -m build --sdist --wheel --outdir dist/
             - name: Publish distribution 📦 to Test PyPI
-              uses: pypa/gh-action-pypi-publish@master
+              if: github.event_name == 'push'
+              uses: pypa/gh-action-pypi-publish@release/v1
               with:
                   user: __token__
                   password: ${{ secrets.TEST_PYPI_TOKEN }}
-                  repository_url: https://test.pypi.org/legacy/
+                  repository-url: https://test.pypi.org/legacy/

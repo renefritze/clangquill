@@ -1,1 +1,1 @@
-"""Add fixtures here if needed"""
+"""Add fixtures here if needed."""
