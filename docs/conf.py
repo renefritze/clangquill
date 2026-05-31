@@ -36,7 +36,7 @@ import clangquill
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
-extensions = ['sphinx.ext.autodoc', 'sphinx.ext.viewcode', "autoapi", "myst_nb",
+extensions = ['sphinx.ext.autodoc', 'sphinx.ext.viewcode', "autoapi.extension", "myst_nb",
                   "sphinx.ext.coverage",
     "sphinx.ext.autosummary",
     "sphinx.ext.linkcode",
@@ -141,8 +141,6 @@ html_sidebars = {
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
 
-# Pngmath should try to align formulas properly.
-pngmath_use_preview = True
 
 autoapi_python_use_implicit_namespaces = True
 autoapi_dirs = [root_dir / 'src'/ 'clangquill']
@@ -173,7 +171,7 @@ intersphinx_mapping = {
     "PyQt5": ("https://www.riverbankcomputing.com/static/Docs/PyQt5", None),
     "scipy": ("https://docs.scipy.org/doc/scipy/reference", None),
     "matplotlib": ("https://matplotlib.org", None),
-    "Sphinx": (" https://www.sphinx-doc.org/en/master/", None),
+    "Sphinx": ("https://www.sphinx-doc.org/en/master/", None),
 }
 
 
@@ -183,6 +181,6 @@ def linkcode_resolve(domain, info):
             return None
         filename = info["module"].replace(".", "/")
         baseurl = "https://github.com/renefritze/clangquill"
-        branch = os.environ.get("CI_COMMIT_REF_NAME", "main")
-        return f"{baseurl}/-/tree/{branch}/src/{filename}.py"
+        branch = os.environ.get("GITHUB_REF_NAME", "main")
+        return f"{baseurl}/blob/{branch}/src/{filename}.py"
     return None

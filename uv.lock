@@ -266,6 +266,7 @@ wheels = [
 name = "clangquill"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "packaging" },
     { name = "rich" },
     { name = "typer" },
@@ -300,6 +301,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click" },
     { name = "furo", marker = "extra == 'dev'", specifier = ">=2023.9.10" },
     { name = "furo", marker = "extra == 'docs'", specifier = ">=2023.9.10" },
     { name = "myst-nb", marker = "extra == 'dev'", specifier = ">=0.18" },

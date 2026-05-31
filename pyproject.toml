@@ -6,7 +6,6 @@ extend-exclude = ["_version.py", "docs/conf.py", "docs/substitutions.py"]
 [tool.ruff.lint]
 select = ["ALL"]
 extend-ignore = ["E501", "ANN201", "ANN001", "D211", "D213"]
-fix = true
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*.py" = ["S101", "D103", "D100", "D104"]
@@ -56,10 +55,9 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 requires-python = ">=3.11"
-dependencies = [ "rich", "packaging" , "typer"]
+dependencies = [ "rich", "packaging" , "typer", "click"]
 
 [project.optional-dependencies]
-# myst current require sphinx<6
 docs = ["sphinx>=6",
     "sphinx-autoapi>=3",
     "myst-nb>=0.18",

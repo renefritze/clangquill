@@ -64,7 +64,7 @@ Ready to contribute? Here's how to set up {}`clangquill` for local development.
    $ cd clangquill/
    $ python3 -m venv venv
    $ source venv/bin/activate
-   $ python3 -m pip instlal .[dev]
+   $ python3 -m pip install .[dev]
    ```
 4. Create a branch for local development:
 
