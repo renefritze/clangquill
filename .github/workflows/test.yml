@@ -1,0 +1,54 @@
+---
+on:
+  push:
+    branches:
+    - main
+  merge_group:
+  pull_request:
+    branches:
+    - main
+
+name: pytest
+jobs:
+  py-check:
+    runs-on: ${{ matrix.config.os }}
+    name: ${{ matrix.config.os }} (${{ matrix.config.py }})
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+        - {os: ubuntu-22.04, py: '3.10'}
+        - {os: ubuntu-22.04, py: '3.11'}
+        - {os: ubuntu-22.04, py: '3.12'}
+        - {os: ubuntu-22.04, py: '3.13'}
+
+    env:
+      OS: ${{ matrix.config.os }}
+      PYTHON: ${{ matrix.config.py }}
+    steps:
+    - name: Cancel Previous Runs
+      uses: styfle/cancel-workflow-action@0.12.1
+      with:
+        access_token: ${{ github.token }}
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.config.py }}
+    - name: Install dependencies
+      run: uv sync --frozen --extra ci
+    - name: run pytest
+      run: uv run pytest
+    - name: Upload coverage
+      uses: codecov/codecov-action@v4
+      with:
+        env_vars: OS,PYTHON
+        fail_ci_if_error: false
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    - name: build docs
+      run: |
+        uv sync --frozen --extra docs
+        uv run make -C docs html
