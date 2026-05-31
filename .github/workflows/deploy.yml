@@ -37,10 +37,21 @@ jobs:
               # manylinux-tagged wheels PyPI accepts.
               uses: pypa/cibuildwheel@v3.4
               env:
+                  # The core links sqlite3 + nlohmann-json, sourced via vcpkg
+                  # inside the manylinux image (apt is unavailable there). vcpkg
+                  # is bootstrapped once per container in CIBW_BEFORE_ALL.
+                  # libclang stays optional here (stub backend); bundling a
+                  # self-contained libclang per ADR 0001 is a follow-up.
                   CIBW_BUILD: cp311-* cp312-* cp313-*
                   CIBW_SKIP: '*-musllinux*'
                   CIBW_ARCHS_LINUX: x86_64
                   CIBW_BUILD_VERBOSITY: '1'
+                  CIBW_BEFORE_ALL_LINUX: >-
+                      git clone https://github.com/microsoft/vcpkg /opt/vcpkg &&
+                      /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+                  CIBW_ENVIRONMENT_LINUX: >-
+                      VCPKG_ROOT=/opt/vcpkg
+                      SKBUILD_CMAKE_DEFINE=CMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake
                   CIBW_TEST_COMMAND: >-
                       python -c "from clangquill import _core;
                       print(_core.__core_version__, _core.have_libclang())"
