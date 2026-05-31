@@ -24,7 +24,9 @@ inline std::uint32_t rotr(std::uint32_t x, std::uint32_t n) {
 
 }  // namespace
 
-Sha256::Sha256() {
+Sha256::Sha256() { reset(); }
+
+void Sha256::reset() {
   state_[0] = 0x6a09e667;
   state_[1] = 0xbb67ae85;
   state_[2] = 0x3c6ef372;
@@ -33,6 +35,8 @@ Sha256::Sha256() {
   state_[5] = 0x9b05688c;
   state_[6] = 0x1f83d9ab;
   state_[7] = 0x5be0cd19;
+  bit_len_ = 0;
+  buffer_len_ = 0;
 }
 
 void Sha256::transform(const std::uint8_t* chunk) {
@@ -119,6 +123,8 @@ std::string Sha256::hexdigest() {
       out.push_back(kHex[byte & 0xf]);
     }
   }
+  // Reset so the object can be reused for a fresh digest, as documented.
+  reset();
   return out;
 }
 

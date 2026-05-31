@@ -23,3 +23,13 @@ TEST_CASE("SHA-256 is streaming-stable across chunk boundaries", "[hash]") {
   b.update("hello world");
   CHECK(a.hexdigest() == b.hexdigest());
 }
+
+TEST_CASE("hexdigest resets state for reuse", "[hash]") {
+  clangquill::hash::Sha256 h;
+  h.update("abc");
+  CHECK(h.hexdigest() ==
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  // After digesting, the object must behave like a fresh instance.
+  CHECK(h.hexdigest() ==
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+}

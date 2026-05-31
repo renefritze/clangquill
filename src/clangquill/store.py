@@ -69,7 +69,9 @@ class Store:
     @contextmanager
     def open(cls, path: str | Path) -> Iterator[Store]:
         """Open ``path`` read-only and yield a :class:`Store`."""
-        uri = f"file:{Path(path)}?mode=ro"
+        # as_uri() percent-encodes spaces and special characters so paths with
+        # e.g. "?" or "#" produce a valid file URI on every platform.
+        uri = f"{Path(path).resolve().as_uri()}?mode=ro"
         con = sqlite3.connect(uri, uri=True)
         try:
             yield cls(con)

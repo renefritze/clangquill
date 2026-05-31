@@ -16,11 +16,20 @@ class Db {
     if (sqlite3_open(path.c_str(), &db_) != SQLITE_OK) {
       std::string msg = db_ ? sqlite3_errmsg(db_) : "out of memory";
       sqlite3_close(db_);
+      db_ = nullptr;
       throw std::runtime_error("sqlite3_open: " + msg);
     }
-    exec("PRAGMA foreign_keys=ON;");
-    exec("PRAGMA journal_mode=WAL;");
-    exec("PRAGMA synchronous=NORMAL;");
+    // The destructor will not run if the constructor throws, so close the
+    // handle ourselves on any pragma failure to avoid leaking it.
+    try {
+      exec("PRAGMA foreign_keys=ON;");
+      exec("PRAGMA journal_mode=WAL;");
+      exec("PRAGMA synchronous=NORMAL;");
+    } catch (...) {
+      sqlite3_close(db_);
+      db_ = nullptr;
+      throw;
+    }
   }
   ~Db() { sqlite3_close(db_); }
   Db(const Db&) = delete;
@@ -58,12 +67,12 @@ class Stmt {
   void bind(int i, std::string_view s) {
     // SQLITE_TRANSIENT: sqlite copies the bytes, so the source may outlive the
     // call or not — safe regardless of the bound string's lifetime.
-    sqlite3_bind_text(st_, i, s.data(), static_cast<int>(s.size()),
-                      SQLITE_TRANSIENT);
+    check_bind(sqlite3_bind_text(st_, i, s.data(), static_cast<int>(s.size()),
+                                 SQLITE_TRANSIENT));
   }
-  void bind(int i, std::int64_t v) { sqlite3_bind_int64(st_, i, v); }
-  void bind(int i, int v) { sqlite3_bind_int64(st_, i, v); }
-  void bind_null(int i) { sqlite3_bind_null(st_, i); }
+  void bind(int i, std::int64_t v) { check_bind(sqlite3_bind_int64(st_, i, v)); }
+  void bind(int i, int v) { check_bind(sqlite3_bind_int64(st_, i, v)); }
+  void bind_null(int i) { check_bind(sqlite3_bind_null(st_, i)); }
 
   // Steps the statement. Returns true if a row is available (SQLITE_ROW).
   bool step() {
@@ -87,6 +96,13 @@ class Stmt {
   std::int64_t column_int64(int i) const { return sqlite3_column_int64(st_, i); }
 
  private:
+  void check_bind(int rc) {
+    if (rc != SQLITE_OK) {
+      throw std::runtime_error(std::string("sqlite3_bind: ") +
+                               sqlite3_errmsg(db_));
+    }
+  }
+
   sqlite3* db_;
   sqlite3_stmt* st_ = nullptr;
 };

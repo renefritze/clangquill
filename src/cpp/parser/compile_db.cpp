@@ -14,6 +14,11 @@ CompileDb::~CompileDb() {
 }
 
 bool CompileDb::load(const std::string& dir) {
+  if (db_) {
+    clang_CompilationDatabase_dispose(
+        static_cast<CXCompilationDatabase>(db_));
+    db_ = nullptr;
+  }
   CXCompilationDatabase_Error err = CXCompilationDatabase_NoError;
   CXCompilationDatabase db =
       clang_CompilationDatabase_fromDirectory(dir.c_str(), &err);

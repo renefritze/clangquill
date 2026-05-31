@@ -271,17 +271,19 @@ void visit_translation_unit(CXCursor tu_cursor, const std::string& main_file,
   clang_visitChildren(tu_cursor, visit, &ctx);
 
   // Finalize: set is_documented and content_hash now that all comments and
-  // parameters have been collected.
+  // parameters have been collected. Index comments by USR first so the per
+  // symbol lookup is O(1) rather than scanning all comments.
   static const std::vector<model::FunctionParameter> kNoParams;
+  std::unordered_map<std::string, const std::string*> comment_by_usr;
+  comment_by_usr.reserve(out.comments.size());
+  for (const auto& cm : out.comments) comment_by_usr[cm.symbol_usr] = &cm.text;
+
   for (auto& sym : out.symbols) {
     if (documented.count(sym.usr)) sym.is_documented = true;
 
     std::string raw;
-    for (const auto& cm : out.comments) {
-      if (cm.symbol_usr == sym.usr) {
-        raw = cm.text;
-        break;
-      }
+    if (auto cit = comment_by_usr.find(sym.usr); cit != comment_by_usr.end()) {
+      raw = *cit->second;
     }
     auto it = params_by_func.find(sym.usr);
     const auto& params = it != params_by_func.end() ? it->second : kNoParams;

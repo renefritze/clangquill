@@ -18,6 +18,7 @@ class Sha256 {
   std::string hexdigest();
 
  private:
+  void reset();
   void transform(const std::uint8_t* chunk);
 
   std::uint32_t state_[8];

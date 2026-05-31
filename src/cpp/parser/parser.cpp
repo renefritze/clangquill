@@ -16,6 +16,15 @@ namespace {
 
 CXIndex as_index(void* p) { return static_cast<CXIndex>(p); }
 
+// RAII guard so the translation unit is disposed on every exit path,
+// including exceptions thrown while collecting diagnostics or visiting.
+struct TuGuard {
+  CXTranslationUnit tu;
+  ~TuGuard() {
+    if (tu) clang_disposeTranslationUnit(tu);
+  }
+};
+
 // Reads a file and appends a SourceFile row (path, sha256, size) if not already
 // present in the module.
 void record_file(const std::string& path, model::ParsedModule& out) {
@@ -88,6 +97,7 @@ bool Parser::parse_file(const std::string& path, model::ParsedModule& out) {
     if (tu) clang_disposeTranslationUnit(tu);
     return false;
   }
+  TuGuard guard{tu};
 
   // Collect non-fatal diagnostics.
   unsigned n = clang_getNumDiagnostics(tu);
@@ -103,7 +113,6 @@ bool Parser::parse_file(const std::string& path, model::ParsedModule& out) {
   record_file(path, out);
   visit_translation_unit(clang_getTranslationUnitCursor(tu), path, out);
 
-  clang_disposeTranslationUnit(tu);
   return true;
 }
 
