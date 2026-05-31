@@ -1,0 +1,98 @@
+# ADR 0001 — libclang sourcing for the manylinux wheel
+
+**Status:** Accepted · **Date:** 2026-05-31 · **Issue:** #4
+
+## Context
+
+`clangquill` links **libclang** in its compiled core (`clangquill._core`).
+To ship a `manylinux` wheel, the libclang shared library must be bundled into
+the wheel by `auditwheel repair`. We needed to decide *where libclang comes
+from* at build time, because that choice dominates the wheel size and the CI
+build cost.
+
+Candidates considered:
+
+1. **Distro / system libclang** (e.g. `libclang-dev` on the build image).
+2. **Official LLVM release tarball** (`clang+llvm-*-x86_64-linux-gnu`).
+3. **vcpkg `llvm` port.**
+4. **The PyPI `libclang` wheel**, which ships a prebuilt, self-contained
+   `libclang.so`.
+
+## Spike results (measured)
+
+All numbers from building the M1 `_core` extension against libclang 18 and
+running `auditwheel` locally.
+
+### Distro libclang + `auditwheel repair`
+
+`auditwheel show` correctly flags `libclang-18.so.18` as an external library.
+`auditwheel repair` vendors it — **and everything it pulls in**:
+
+| vendored lib | uncompressed |
+| --- | --- |
+| `libLLVM-*.so.1` | **129 MB** |
+| `libclang-18-*.so.18` | 33 MB |
+| `libicudata-*.so` | 29 MB |
+| (libxml2, libicuuc, libedit, …) | ~5 MB |
+
+Repaired wheel: **~61 MB compressed**. The blowup is because the distro's
+`libclang.so` is the *shared* variant that dynamically depends on the
+monolithic `libLLVM.so`, so auditwheel must vendor the entire libLLVM.
+
+The repaired wheel was installed in a clean venv (no LLVM present) and verified:
+`_core` resolves `libclang` from `clangquill.libs/` and `clang_getClangVersion()`
+returns the expected version. So the mechanism works — it is just large.
+
+### PyPI `libclang` wheel
+
+Ships a single, self-contained `clang/native/libclang.so`:
+
+* **60 MB uncompressed / 24.5 MB compressed** — libLLVM is statically linked
+  into one `libclang.so`, with internal symbols hidden.
+
+This is less than half the size of the distro-based repaired wheel, with no
+separate libLLVM/ICU payload.
+
+## Decision
+
+**Build against the `libclang.so` from the PyPI `libclang` wheel** (or an
+equivalent self-contained libclang where libLLVM is statically linked and
+symbols are hidden), rather than a distro/shared-libLLVM libclang.
+
+Rationale:
+
+* **Size**: ~24 MB vs ~61 MB repaired — a self-contained libclang avoids
+  vendoring the full 129 MB libLLVM.
+* **Reproducibility**: a pinned PyPI version is trivial to fetch in CI on any
+  arch the project targets; no multi-hour LLVM compile (ruling out the vcpkg
+  `llvm` port without a binary cache).
+* **CMake already supports it**: `cmake/FindLibClang.cmake` discovers libclang
+  via `LibClang_ROOT` / `llvm-config` / standard paths, so CI only needs to
+  point `LibClang_ROOT` at the unpacked libclang and provide `clang-c` headers.
+
+The official LLVM release tarball remains a viable fallback (it also ships a
+self-contained-ish libclang and the matching `clang-c` headers); it is heavier
+to download but useful if a libclang build newer than the PyPI package is
+needed.
+
+## Consequences / follow-ups
+
+* `cmake/FindLibClang.cmake` needs the `clang-c/Index.h` headers available at
+  build time. The PyPI `libclang` wheel ships the `.so` but **not** the
+  headers, so CI must also provide headers (from the matching LLVM release
+  tarball, or a pinned vendored copy). This is wired up in the M2 build, not
+  M1 (M1 deliberately keeps libclang linkage optional).
+* `cibuildwheel` `CIBW_BEFORE_ALL` will fetch + unpack libclang and export
+  `LibClang_ROOT`; `CLANGQUILL_WITH_LIBCLANG=ON` is set so a missing libclang
+  fails the build loudly rather than silently producing the stub backend.
+* Wheel size will be in the ~25–40 MB range — acceptable for a libclang-backed
+  tool; documented for users.
+
+## Licensing
+
+LLVM/Clang (incl. libclang) is licensed under **Apache-2.0 WITH
+LLVM-exception**, which is permissive and compatible with clangquill's
+**BSD-2-Clause**. Wheels that bundle `libclang.so` must include the LLVM
+license. Action: ship the LLVM license file alongside `LICENSE` in the wheel
+metadata when libclang is bundled (to be added with the M2 libclang-enabled
+build).
