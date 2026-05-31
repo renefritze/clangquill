@@ -1,0 +1,85 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = ["_version.py", "docs/conf.py"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+extend-ignore = ["E501", "ANN201", "ANN001", "D211", "D213"]
+fix = true
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["S101", "D103"]
+
+[tool.pytest.ini_options]
+addopts = "--cov=clangquill --cov-report=term-missing"
+
+
+[tool.hatch]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.0"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/clangquill/_version.py"
+
+[tool.hatch.envs.default]
+python = "3.11"
+
+[tool.hatch.envs.default.scripts]
+test = "pytest"
+lint = [
+  "ruff format .",
+  "ruff check --fix .",
+  "ty check src/clangquill/",
+]
+
+docs-build = "make -C docs html"
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "clangquill"
+authors = [
+  { name = "clangquill", email = "rene@fritze.me" }
+]
+description = "Parse Doxygen-documented C++ with libclang and generate MyST Markdown API docs for Sphinx"
+readme = "README.md"
+dynamic = ["version"]
+classifiers = [
+    "Programming Language :: Python :: 3 :: Only",
+]
+requires-python = ">=3.11"
+dependencies = [ "rich", "packaging" , "typer"]
+
+[project.optional-dependencies]
+# myst current require sphinx<6
+docs = ["sphinx>=6",
+    "sphinx-autoapi>=3",
+    "myst-nb>=0.18",
+    "furo>=2023.9.10"]
+ci = [
+    "pytest",
+    "pytest-cov",
+]
+dev = [
+    "ty",
+    "ruff",
+    "pytest",
+    "pytest-cov",
+    "pytest-pycharm",
+    "pytest-regressions",
+    "pytest-datadir",
+    "clangquill[docs]",
+]
+
+
+[project.urls]
+Documentation = "https://github.com/renefritze/clangquill"
+Source = "https://github.com/renefritze/clangquill"

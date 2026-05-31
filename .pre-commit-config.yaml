@@ -1,0 +1,46 @@
+---
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+  - repo: https://github.com/lyz-code/yamlfix/
+    rev: 1.16.0
+    hooks:
+      - id: yamlfix
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.0
+    hooks:
+      - id: ruff
+      - id: ruff-format
+# The markdown-link-check can't access internal or private repos, see
+# .markdown_link_check_config.json on how to exclude more than the
+# github.com/arup-group
+  - repo: https://github.com/tcort/markdown-link-check
+    rev: v3.11.2
+    hooks:
+      - id: markdown-link-check
+        args: [--quiet, --config=.markdown_link_check_config.json]
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.6.26
+    hooks:
+      - id: actionlint
+# this should go last since it will fix line endings broken by other tools
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+    # The pre-commit check on CI detects some whitespace changes if we include .github
+        exclude: .github
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-xml
+      - id: check-json
+      - id: pretty-format-json
+        args: [--autofix, --no-sort-keys, --indent=4]
+        exclude: .*\.ipynb$
+      - id: check-symlinks
+      - id: debug-statements
+      - id: fix-byte-order-marker
