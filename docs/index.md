@@ -9,6 +9,7 @@ installation
 usage
 contributing
 authors
+development/index
 autoapi/index
 
 ```
