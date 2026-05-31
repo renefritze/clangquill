@@ -10,6 +10,12 @@ updates:
       schedule:
           interval: weekly
           day: monday
+      cooldown:
+          default-days: 6
+      groups:
+          python-dependencies:
+              patterns:
+                  - "*"
       allow:
           - dependency-type: all
       commit-message:
@@ -21,6 +27,12 @@ updates:
       schedule:
           interval: weekly
           day: monday
+      cooldown:
+          default-days: 6
+      groups:
+          github-actions:
+              patterns:
+                  - "*"
       allow:
           - dependency-type: all
       commit-message:
