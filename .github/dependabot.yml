@@ -5,10 +5,17 @@
 version: 2
 
 updates:
-    - package-ecosystem: pip
+    - package-ecosystem: uv
       directory: /
       schedule:
           interval: weekly
+          day: monday
+      cooldown:
+          default-days: 6
+      groups:
+          python-dependencies:
+              patterns:
+                  - "*"
       allow:
           - dependency-type: all
       commit-message:
@@ -19,16 +26,13 @@ updates:
       directory: /
       schedule:
           interval: weekly
-      allow:
-          - dependency-type: all
-      commit-message:
-          prefix: ':arrow_up:'
-      open-pull-requests-limit: 50
-
-    - package-ecosystem: docker
-      directory: /docker
-      schedule:
-          interval: weekly
+          day: monday
+      cooldown:
+          default-days: 6
+      groups:
+          github-actions:
+              patterns:
+                  - "*"
       allow:
           - dependency-type: all
       commit-message:
