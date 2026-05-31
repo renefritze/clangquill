@@ -43,7 +43,7 @@ jobs:
     - name: run pytest
       run: uv run pytest
     - name: Upload coverage
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v6
       with:
         env_vars: OS,PYTHON
         fail_ci_if_error: false
