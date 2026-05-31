@@ -31,7 +31,8 @@ bool have_libclang() {
 std::string libclang_version() {
 #if defined(CLANGQUILL_HAVE_LIBCLANG)
   CXString s = clang_getClangVersion();
-  std::string out = clang_getCString(s);
+  const char *cstr = clang_getCString(s);
+  std::string out = cstr ? cstr : "";
   clang_disposeString(s);
   return out;
 #else

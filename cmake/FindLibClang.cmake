@@ -17,7 +17,6 @@ endif()
 
 # Allow an llvm-config to point us at the right prefix.
 find_program(LLVM_CONFIG_EXECUTABLE NAMES llvm-config llvm-config-18 llvm-config-17)
-set(_clangquill_hints "")
 if(LLVM_CONFIG_EXECUTABLE)
   execute_process(
     COMMAND "${LLVM_CONFIG_EXECUTABLE}" --includedir
@@ -27,7 +26,6 @@ if(LLVM_CONFIG_EXECUTABLE)
     COMMAND "${LLVM_CONFIG_EXECUTABLE}" --libdir
     OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE _llvm_libdir
     ERROR_QUIET)
-  list(APPEND _clangquill_hints "${_llvm_incdir}" "${_llvm_libdir}")
 endif()
 
 find_path(
