@@ -47,11 +47,19 @@ jobs:
                   CIBW_ARCHS_LINUX: x86_64
                   CIBW_BUILD_VERBOSITY: '1'
                   CIBW_BEFORE_ALL_LINUX: >-
+                      cp {project}/tools/ci/vcpkg-asset-fetch.sh /opt/vcpkg-asset-fetch.sh &&
+                      chmod +x /opt/vcpkg-asset-fetch.sh &&
                       git clone https://github.com/microsoft/vcpkg /opt/vcpkg &&
                       /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+                  # cibuildwheel evaluates each CIBW_ENVIRONMENT value through
+                  # bashlex, which rejects a bare `NAME=value` (it parses as a
+                  # shell assignment), so the toolchain define must be quoted.
+                  # sqlite.org also 403s vcpkg's default downloader, so distfiles
+                  # go through a browser-User-Agent script (SHA512 still checked).
                   CIBW_ENVIRONMENT_LINUX: >-
                       VCPKG_ROOT=/opt/vcpkg
-                      SKBUILD_CMAKE_DEFINE=CMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake
+                      SKBUILD_CMAKE_DEFINE="CMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake"
+                      X_VCPKG_ASSET_SOURCES="clear;x-script,/opt/vcpkg-asset-fetch.sh {url} {sha512} {dst}"
                   CIBW_TEST_COMMAND: >-
                       python -c "from clangquill import _core;
                       print(_core.__core_version__, _core.have_libclang())"
