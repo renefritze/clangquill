@@ -49,7 +49,11 @@ jobs:
                   CIBW_SKIP: '*-musllinux*'
                   CIBW_ARCHS_LINUX: x86_64
                   CIBW_BUILD_VERBOSITY: '1'
+                  # manylinux_2_28 ships unzip/tar/curl but not zip, which
+                  # vcpkg's bootstrap requires; install it (a vcpkg build
+                  # prerequisite, not a C++ dependency) before bootstrapping.
                   CIBW_BEFORE_ALL_LINUX: >-
+                      dnf -y install zip unzip tar curl &&
                       cp {project}/tools/ci/vcpkg-asset-fetch.sh /opt/vcpkg-asset-fetch.sh &&
                       chmod +x /opt/vcpkg-asset-fetch.sh &&
                       git clone https://github.com/microsoft/vcpkg /opt/vcpkg &&
