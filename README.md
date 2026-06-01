@@ -1,6 +1,7 @@
 clangquill
 =========
 
+![ClangQuill Logo](docs/_static/clangquill-logo.png)
 
 [![image](https://github.com/renefritze/clangquill/workflows/pytest/badge.svg)](https://github.com/renefritze/clangquill/actions)
 
