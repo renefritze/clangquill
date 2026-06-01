@@ -129,6 +129,23 @@ TEST_CASE("doxygen parser captures deprecated", "[comments]") {
   CHECK(dep->value.find("divide") != std::string::npos);
 }
 
+TEST_CASE("doxygen parser preserves verbatim block text", "[comments]") {
+  auto m = parse_fixture("doxygen.hpp");
+  const auto* sq = find(m, "doc::square");
+  REQUIRE(sq != nullptr);
+  auto fs = fields_of(m, sq->usr);
+
+  // The @code ... @endcode body must survive as detail text rather than being
+  // dropped when libclang hands back VerbatimBlockLine children.
+  bool found_code = false;
+  for (const auto& f : fs) {
+    if (f.name == "detail" && f.value.find("square(3)") != std::string::npos) {
+      found_code = true;
+    }
+  }
+  CHECK(found_code);
+}
+
 TEST_CASE("parsed comments store a format and JSON projection", "[comments]") {
   auto m = parse_fixture("doxygen.hpp");
   const auto* divide = find(m, "doc::divide");

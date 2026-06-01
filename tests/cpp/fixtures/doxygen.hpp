@@ -32,4 +32,12 @@ T multiply(T a, T b);
 /// @deprecated use divide instead
 int old_divide(int a, int b);
 
+/**
+ * Squares a value.
+ * @code
+ *   int y = square(3); // y == 9
+ * @endcode
+ */
+int square(int x);
+
 }  // namespace doc

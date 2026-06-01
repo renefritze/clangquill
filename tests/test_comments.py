@@ -74,6 +74,21 @@ def test_doxygen_parse_autobrief_without_command() -> None:
     assert model.detail == []
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "///< trailing member doc",
+        "//!< trailing member doc",
+        "/**< trailing member doc */",
+        "/*!< trailing member doc */",
+    ],
+)
+def test_doxygen_parse_strips_post_item_markers(raw: str) -> None:
+    # The Doxygen "<" post-item markers must not leak the '<' into the text.
+    model = doxygen_parse(raw)
+    assert model.brief == "trailing member doc"
+
+
 def test_model_from_fields_round_trips() -> None:
     rows = [
         ("brief", "", "A brief."),
@@ -120,6 +135,11 @@ def test_resolve_override_none() -> None:
 
 def test_resolve_override_callable() -> None:
     assert resolve_override(shouting_parser) is shouting_parser
+
+
+def test_resolve_override_registered_name() -> None:
+    # A registered format name resolves via the registry, not a dotted import.
+    assert resolve_override("doxygen") is doxygen_parse
 
 
 def test_resolve_override_dotted_path() -> None:

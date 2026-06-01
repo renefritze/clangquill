@@ -64,6 +64,16 @@ void collect_text(CXComment c, std::string& out) {
     }
     return;
   }
+  if (kind == CXComment_VerbatimBlockLine) {
+    out += to_string(clang_VerbatimBlockLineComment_getText(c));
+    out += ' ';
+    return;
+  }
+  if (kind == CXComment_VerbatimLine) {
+    out += to_string(clang_VerbatimLineComment_getText(c));
+    out += ' ';
+    return;
+  }
   unsigned n = clang_Comment_getNumChildren(c);
   for (unsigned i = 0; i < n; ++i) collect_text(clang_Comment_getChild(c, i), out);
 }
@@ -212,9 +222,12 @@ std::vector<std::string> strip_markers(const std::string& raw) {
       }
       std::size_t b = line.find_last_not_of(" \t\r");
       line = line.substr(a, b - a + 1);
-      // Strip leading markers.
+      // Strip leading markers (post-item "<" variants checked first so the
+      // trailing '<' is not left behind as content).
       auto starts_with = [&](const char* p) { return line.rfind(p, 0) == 0; };
-      if (starts_with("/**") || starts_with("/*!")) line.erase(0, 3);
+      if (starts_with("///<") || starts_with("//!<")) line.erase(0, 4);
+      else if (starts_with("/**<") || starts_with("/*!<")) line.erase(0, 4);
+      else if (starts_with("/**") || starts_with("/*!")) line.erase(0, 3);
       else if (starts_with("/*")) line.erase(0, 2);
       else if (starts_with("///") || starts_with("//!")) line.erase(0, 3);
       else if (starts_with("//")) line.erase(0, 2);

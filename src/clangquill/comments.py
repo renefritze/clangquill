@@ -125,7 +125,7 @@ def model_from_fields(rows: Iterable[tuple[str, str, str]]) -> CommentModel:
 
 # --- Default Doxygen parser (pure Python) ------------------------------------
 
-_MARKER_RE = re.compile(r"^\s*(/\*\*|/\*!|/\*|///<|///|//!|//)")
+_MARKER_RE = re.compile(r"^\s*(/\*\*<|/\*!<|/\*\*|/\*!|/\*|///<|///|//!<|//!|//)")
 _COMMAND_RE = re.compile(r"^[@\\](\w+)\s*(.*)$")
 
 # Command aliases collapsed onto a canonical model field/handler.
@@ -291,9 +291,10 @@ def _import_dotted(path: str) -> CommentParser:
 def resolve_override(override: str | CommentParser | None = None) -> CommentParser | None:
     """Resolve a comment-parser override, or ``None`` if none is configured.
 
-    The override may be passed directly (a dotted path string or a callable) or
-    left to the ``CLANGQUILL_COMMENT_PARSER`` environment variable, which holds a
-    dotted path to a ``str -> CommentModel`` callable.
+    The override may be passed directly (a callable, a registered format name,
+    or a dotted path string) or left to the ``CLANGQUILL_COMMENT_PARSER``
+    environment variable, which holds a registered name or a dotted path to a
+    ``str -> CommentModel`` callable.
     """
     if override is None:
         override = os.environ.get(OVERRIDE_ENV) or None
@@ -301,4 +302,6 @@ def resolve_override(override: str | CommentParser | None = None) -> CommentPars
         return None
     if callable(override):
         return override
+    if override in _REGISTRY:
+        return _REGISTRY[override]
     return _import_dotted(override)
