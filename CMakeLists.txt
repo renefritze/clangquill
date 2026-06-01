@@ -43,6 +43,8 @@ if(CLANGQUILL_LIBCLANG_FOUND)
        src/cpp/parser/cursor_utils.cpp
        src/cpp/parser/compile_db.cpp
        src/cpp/parser/references.cpp
+       src/cpp/parser/comment_parser.cpp
+       src/cpp/parser/doxygen_comment_parser.cpp
        src/cpp/parser/ast_visitor.cpp
        src/cpp/parser/parser.cpp)
 endif()

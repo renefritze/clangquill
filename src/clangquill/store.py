@@ -14,6 +14,8 @@ from enum import IntEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from clangquill.comments import CommentModel, CommentParser, model_from_fields, resolve_override
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -38,6 +40,16 @@ class SymbolKind(IntEnum):
     TYPE_ALIAS = 14
     FUNCTION_TEMPLATE = 15
     CLASS_TEMPLATE = 16
+
+
+@dataclass(frozen=True)
+class RawComment:
+    """A row from the ``comments`` table: the verbatim text plus its parse."""
+
+    symbol_usr: str
+    raw_text: str
+    format: str
+    fields_json: str
 
 
 @dataclass(frozen=True)
@@ -100,6 +112,48 @@ class Store:
     def symbol_count(self) -> int:
         """Return the number of rows in the ``symbols`` table."""
         return int(self._con.execute("SELECT count(*) FROM symbols").fetchone()[0])
+
+    def raw_comment(self, usr: str) -> RawComment | None:
+        """Return the raw ``comments`` row for ``usr``, or ``None``."""
+        row = self._con.execute(
+            "SELECT symbol_usr, raw_text, format, fields_json FROM comments WHERE symbol_usr = ?",
+            (usr,),
+        ).fetchone()
+        if row is None:
+            return None
+        return RawComment(
+            symbol_usr=row["symbol_usr"],
+            raw_text=row["raw_text"],
+            format=row["format"],
+            fields_json=row["fields_json"] or "",
+        )
+
+    def comment(
+        self,
+        usr: str,
+        *,
+        parser: str | CommentParser | None = None,
+    ) -> CommentModel | None:
+        """Return the structured :class:`CommentModel` for symbol ``usr``.
+
+        By default the model is reconstructed from the ``comment_fields`` rows
+        produced by the C++ Doxygen parser. When a parser override is supplied
+        (``parser`` argument, or the ``CLANGQUILL_COMMENT_PARSER`` environment
+        variable) the symbol's raw comment text is re-parsed by that callable
+        instead, so the comment format stays swappable from pure Python.
+        Returns ``None`` for an undocumented symbol.
+        """
+        raw = self.raw_comment(usr)
+        if raw is None:
+            return None
+        override = resolve_override(parser)
+        if override is not None:
+            return override(raw.raw_text)
+        rows = self._con.execute(
+            "SELECT name, arg, value FROM comment_fields WHERE symbol_usr = ? ORDER BY ordinal",
+            (usr,),
+        ).fetchall()
+        return model_from_fields((r["name"], r["arg"], r["value"]) for r in rows)
 
     @staticmethod
     def _to_symbol(row: sqlite3.Row) -> Symbol:

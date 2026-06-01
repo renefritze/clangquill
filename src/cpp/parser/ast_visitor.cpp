@@ -4,7 +4,9 @@
 #include <unordered_set>
 
 #include "hash/content_hash.hpp"
+#include "parser/comment_parser.hpp"
 #include "parser/cursor_utils.hpp"
+#include "parser/doxygen_comment_parser.hpp"
 #include "parser/references.hpp"
 
 namespace clangquill::parser {
@@ -20,6 +22,7 @@ struct VisitCtx {
   std::unordered_set<std::string>* documented;
   std::unordered_map<std::string, std::vector<model::FunctionParameter>>*
       params_by_func;
+  const ICommentParser* comment_parser;
 };
 
 bool is_record(model::SymbolKind k) {
@@ -98,10 +101,18 @@ std::string handle_symbol(CXCursor c, model::SymbolKind kind, VisitCtx& ctx) {
   // even if the comment is seen on a different (re)declaration.
   std::string raw = to_string(clang_Cursor_getRawCommentText(c));
   if (!raw.empty() && ctx.documented->insert(usr).second) {
+    model::CommentModel parsed = ctx.comment_parser->parse(c, raw);
+
     model::RawComment comment;
     comment.symbol_usr = usr;
     comment.text = raw;
+    comment.format = ctx.comment_parser->format();
+    comment.fields_json = to_fields_json(parsed);
     ctx.mod->comments.push_back(std::move(comment));
+
+    auto fields = to_comment_fields(usr, parsed);
+    ctx.mod->comment_fields.insert(ctx.mod->comment_fields.end(),
+                                   fields.begin(), fields.end());
   }
 
   // De-dup symbols: keep the first row, but let a definition supersede a prior
@@ -259,6 +270,7 @@ void visit_translation_unit(CXCursor tu_cursor, const std::string& main_file,
   std::unordered_set<std::string> documented;
   std::unordered_map<std::string, std::vector<model::FunctionParameter>>
       params_by_func;
+  DoxygenCommentParser comment_parser;
 
   VisitCtx ctx;
   ctx.mod = &out;
@@ -267,6 +279,7 @@ void visit_translation_unit(CXCursor tu_cursor, const std::string& main_file,
   ctx.seen_symbols = &seen_symbols;
   ctx.documented = &documented;
   ctx.params_by_func = &params_by_func;
+  ctx.comment_parser = &comment_parser;
 
   clang_visitChildren(tu_cursor, visit, &ctx);
 
