@@ -1,13 +1,13 @@
 ---
-# This workflow will upload a Python Package using Twine when a release is created
-# For more information see: https://help.github.com/en/actions/language-and-framework-guides/using-python-with-github-actions#publishing-to-package-registries
+# Build and publish the package to PyPI when a GitHub release is published.
+# Create a release (with its tag) in the GitHub UI / `gh release create` and
+# this runs automatically; draft releases do not trigger it until published.
 
 name: Upload Python Package
 
 on:
-    push:
-        tags:
-            - v*
+    release:
+        types: [published]
 
 jobs:
     pypi:
@@ -74,25 +74,3 @@ jobs:
               with:
                   user: __token__
                   password: ${{ secrets.PYPI_TOKEN }}
-    github:
-        name: Create Release
-        runs-on: ubuntu-latest
-        permissions:
-            contents: write
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v6
-            - name: Create Release
-              id: create_release
-              uses: actions/create-release@v1
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              with:
-                  tag_name: ${{ github.ref }}
-                  release_name: ${{ github.ref }}
-                  body: |
-                      Changes in this Release
-                      - First Change
-                      - Second Change
-                  draft: true
-                  prerelease: false
