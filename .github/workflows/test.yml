@@ -29,6 +29,11 @@ jobs:
         access_token: ${{ github.token }}
     - name: Checkout
       uses: actions/checkout@v6
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libclang-dev libsqlite3-dev nlohmann-json3-dev
     - name: Install uv
       uses: astral-sh/setup-uv@v7
     - name: Set up Python
@@ -36,6 +41,9 @@ jobs:
       with:
         python-version: ${{ matrix.config.py }}
     - name: Install dependencies
+      # Build the core with libclang so the parser path is exercised by pytest.
+      env:
+        SKBUILD_CMAKE_DEFINE: CLANGQUILL_WITH_LIBCLANG=ON
       run: uv sync --frozen --extra ci
     - name: run pytest
       run: uv run pytest

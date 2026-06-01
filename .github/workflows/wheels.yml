@@ -27,13 +27,33 @@ jobs:
             - name: Build manylinux wheels
               uses: pypa/cibuildwheel@v3.4
               env:
-                  # M1 builds the stub backend in the manylinux image; real
-                  # libclang sourcing is handled by the spike (#4). The build is
-                  # therefore self-contained and needs no extra system deps.
-                  CIBW_BUILD: cp311-* cp312-* cp313-*
+                  # The core links sqlite3 + nlohmann-json, sourced via vcpkg
+                  # inside the manylinux image (apt is unavailable there). vcpkg
+                  # is bootstrapped once per container in CIBW_BEFORE_ALL.
+                  # libclang stays optional here (stub backend); bundling a
+                  # self-contained libclang per ADR 0001 is a follow-up.
+                  CIBW_BUILD: cp313-*
                   CIBW_SKIP: '*-musllinux*'
                   CIBW_ARCHS_LINUX: x86_64
                   CIBW_BUILD_VERBOSITY: '1'
+                  # manylinux_2_28 ships unzip/tar/curl but not zip, which
+                  # vcpkg's bootstrap requires; install it (a vcpkg build
+                  # prerequisite, not a C++ dependency) before bootstrapping.
+                  CIBW_BEFORE_ALL_LINUX: >-
+                      dnf -y install zip unzip tar curl &&
+                      cp {project}/tools/ci/vcpkg-asset-fetch.sh /opt/vcpkg-asset-fetch.sh &&
+                      chmod +x /opt/vcpkg-asset-fetch.sh &&
+                      git clone https://github.com/microsoft/vcpkg /opt/vcpkg &&
+                      /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+                  # cibuildwheel evaluates each CIBW_ENVIRONMENT value through
+                  # bashlex, which rejects a bare `NAME=value` (it parses as a
+                  # shell assignment), so the toolchain define must be quoted.
+                  # sqlite.org also 403s vcpkg's default downloader, so distfiles
+                  # go through a browser-User-Agent script (SHA512 still checked).
+                  CIBW_ENVIRONMENT_LINUX: >-
+                      VCPKG_ROOT=/opt/vcpkg
+                      SKBUILD_CMAKE_DEFINE="CMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake"
+                      X_VCPKG_ASSET_SOURCES="clear;x-script,/opt/vcpkg-asset-fetch.sh {url} {sha512} {dst}"
                   CIBW_TEST_COMMAND: >-
                       python -c "from clangquill import _core;
                       print(_core.__core_version__, _core.have_libclang())"
