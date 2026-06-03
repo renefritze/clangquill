@@ -1,6 +1,6 @@
 """Tests for `clangquill` package."""
 
-from click.testing import CliRunner
+from typer.testing import CliRunner
 
 import clangquill
 from clangquill import cli
@@ -15,11 +15,19 @@ def test_import():
 
 
 def test_command_line_interface():
-    """Test the CLI."""
+    """The typer app exposes a documented ``build`` command."""
     runner = CliRunner()
-    result = runner.invoke(cli.main)
+    result = runner.invoke(cli.app, ["--help"])
     assert result.exit_code == 0
-    assert "clangquill.cli.main" in result.output
-    help_result = runner.invoke(cli.main, ["--help"])
-    assert help_result.exit_code == 0
-    assert "--help  Show this message and exit." in help_result.output
+    assert "build" in result.output
+
+    build_help = runner.invoke(cli.app, ["build", "--help"])
+    assert build_help.exit_code == 0
+    assert "--output-dir" in build_help.output
+
+
+def test_build_requires_inputs():
+    """Invoking ``build`` with no inputs fails with usage help."""
+    runner = CliRunner()
+    result = runner.invoke(cli.app, ["build"])
+    assert result.exit_code != 0
