@@ -1,0 +1,7 @@
+{# Concepts have no dedicated SymbolKind in the IR yet; this template is a
+   ready customization seam for the C++ domain `cpp:concept` object. #}
+{% set comment = gen.comment(symbol) %}
+```{cpp:concept} {{ symbol.signature or symbol.qualified_name }}
+
+{{ render_comment(comment) }}
+```

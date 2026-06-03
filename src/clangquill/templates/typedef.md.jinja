@@ -1,0 +1,6 @@
+{% import "partials/signature.md.jinja" as sig %}
+{% set comment = gen.comment(symbol) %}
+```{{ "{" ~ gen.directive(symbol) ~ "}" }} {{ sig.directive_argument(symbol) }}
+
+{{ render_comment(comment) }}
+```

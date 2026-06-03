@@ -1,0 +1,17 @@
+{% import "partials/signature.md.jinja" as sig %}
+{% set comment = gen.comment(symbol) %}
+{{ "#" * level }} {{ gen.label(symbol) }} `{{ symbol.qualified_name }}`
+
+{% set bases = gen.bases(symbol) %}
+{% if bases %}
+**Inherits from** {% for base in bases %}{{ xref(base) }}{{ ", " if not loop.last }}{% endfor %}.
+
+{% endif %}
+```{{ "{" ~ gen.directive(symbol) ~ "}" }} {{ sig.directive_argument(symbol) }}
+
+{{ render_comment(comment) }}
+```
+{% for child in gen.children(symbol) %}
+
+{{ gen.render_symbol(child, level=level + 1) }}
+{% endfor %}

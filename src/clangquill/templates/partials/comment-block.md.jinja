@@ -1,0 +1,53 @@
+{# Prose rendering for a CommentModel: brief, detail paragraphs and the
+   stand-alone admonitions. Field lists (params/returns/...) live in
+   param-table.md.jinja so a function directive can place them in its body. #}
+{% macro body(model) -%}
+{% if model is none %}
+*No documentation provided.*
+{% else %}
+{% if model.brief %}
+{{ model.brief }}
+{% endif %}
+{% for paragraph in model.detail %}
+
+{{ paragraph }}
+{% endfor %}
+{% for text in model.deprecated %}
+
+:::{deprecated} {{ text }}
+:::
+{% endfor %}
+{% for text in model.warning %}
+
+:::{warning}
+{{ text }}
+:::
+{% endfor %}
+{% for text in model.note %}
+
+:::{note}
+{{ text }}
+:::
+{% endfor %}
+{% for text in model.pre %}
+
+:::{admonition} Precondition
+{{ text }}
+:::
+{% endfor %}
+{% for text in model.post %}
+
+:::{admonition} Postcondition
+{{ text }}
+:::
+{% endfor %}
+{% if model.since %}
+
+*Since: {{ model.since | join(", ") }}.*
+{% endif %}
+{% if model.see %}
+
+**See also:** {% for item in model.see %}{{ xref(item | trim) }}{{ ", " if not loop.last }}{% endfor %}
+{% endif %}
+{% endif %}
+{%- endmacro %}

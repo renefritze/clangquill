@@ -1,0 +1,6 @@
+{# Directive-argument helpers. These delegate to the Python signature builder
+   (the qualification logic lives there) but stay a template seam so projects
+   can reshape the declaration line by overriding this partial. #}
+{% macro directive_argument(symbol) -%}
+{{ gen.signature(symbol) }}
+{%- endmacro %}

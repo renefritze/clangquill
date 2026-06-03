@@ -206,6 +206,7 @@ name = "clangquill"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
+    { name = "jinja2" },
     { name = "packaging" },
     { name = "rich" },
     { name = "typer" },
@@ -241,6 +242,7 @@ requires-dist = [
     { name = "clangquill", extras = ["docs"], marker = "extra == 'dev'" },
     { name = "click" },
     { name = "furo", marker = "extra == 'docs'", specifier = ">=2023.9.10" },
+    { name = "jinja2", specifier = ">=3.1" },
     { name = "myst-nb", marker = "extra == 'docs'", specifier = ">=0.18" },
     { name = "packaging" },
     { name = "pytest", marker = "extra == 'ci'" },
