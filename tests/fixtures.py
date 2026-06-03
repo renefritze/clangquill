@@ -18,7 +18,7 @@ _SCHEMA_HPP = Path(__file__).resolve().parents[1] / "src" / "cpp" / "store" / "s
 
 def _schema_ddl() -> str:
     """Return the IR schema DDL extracted from the C++ source of truth."""
-    text = _SCHEMA_HPP.read_text()
+    text = _SCHEMA_HPP.read_text(encoding="utf-8")
     return text.split('R"SQL(', 1)[1].rsplit(')SQL"', 1)[0]
 
 

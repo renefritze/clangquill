@@ -322,10 +322,10 @@ class Generator:
             while stem in seen:
                 stem += "_"
             seen.add(stem)
-            (out / f"{stem}.md").write_text(self.render_symbol(root, level=1))
+            (out / f"{stem}.md").write_text(self.render_symbol(root, level=1), encoding="utf-8")
             pages.append((stem, root))
         index = self.env.get_template("index.md.jinja")
-        (out / "index.md").write_text(index.render(pages=pages))
+        (out / "index.md").write_text(index.render(pages=pages), encoding="utf-8")
         return [stem for stem, _ in pages]
 
 

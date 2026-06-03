@@ -23,8 +23,8 @@ def _assert_golden(name: str, text: str) -> None:
     path = GOLDEN_DIR / name
     if os.environ.get(REGEN_ENV):
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-    expected = path.read_text()
+        path.write_text(text, encoding="utf-8")
+    expected = path.read_text(encoding="utf-8")
     assert text == expected
 
 
