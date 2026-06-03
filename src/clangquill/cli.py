@@ -16,6 +16,11 @@ import typer
 from clangquill.config import GROUP_BY_CHOICES, Config, ConfigError
 from clangquill.pipeline import build as run_pipeline
 
+# Kept as a module constant rather than an inline f-string in the option
+# annotation: autoapi/autodoc cannot statically parse an f-string (JoinedStr)
+# inside a function arglist.
+_GROUP_BY_HELP = f"Page partitioning: {' | '.join(GROUP_BY_CHOICES)}."
+
 app = typer.Typer(
     add_completion=False,
     help="Parse C++ and generate MyST Markdown API documentation.",
@@ -77,7 +82,7 @@ def build(  # noqa: PLR0913
     ] = None,
     group_by: Annotated[
         str,
-        typer.Option("--group-by", help=f"Page partitioning: {' | '.join(GROUP_BY_CHOICES)}."),
+        typer.Option("--group-by", help=_GROUP_BY_HELP),
     ] = "symbol",
     toctree_maxdepth: Annotated[int, typer.Option("--toctree-maxdepth", help="Generated toctree depth.")] = 2,
 ) -> None:
