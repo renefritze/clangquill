@@ -1,0 +1,16 @@
+{% import "partials/signature.md.jinja" as sig %}
+{% set comment = gen.comment(symbol) %}
+```{{ "{" ~ gen.directive(symbol) ~ "}" }} {{ sig.directive_argument(symbol) }}
+
+{{ render_comment(comment) }}
+```
+{% for enumerator in gen.enumerators(symbol) %}
+{% set ec = store.comment(enumerator.usr) %}
+
+```{cpp:enumerator} {{ symbol.qualified_name }}::{{ enumerator.name }}
+{% if ec %}
+
+{{ render_comment(ec) }}
+{% endif %}
+```
+{% endfor %}

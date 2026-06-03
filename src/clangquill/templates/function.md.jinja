@@ -1,0 +1,11 @@
+{% import "partials/signature.md.jinja" as sig %}
+{% set comment = gen.comment(symbol) %}
+{% set fields = field_list(comment) %}
+```{{ "{" ~ gen.directive(symbol) ~ "}" }} {{ sig.directive_argument(symbol) }}
+
+{{ render_comment(comment) }}
+{% if fields %}
+
+{{ fields }}
+{% endif %}
+```

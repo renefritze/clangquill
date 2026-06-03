@@ -1,0 +1,5 @@
+{{ "#" * level }} File `{{ file.path }}`
+{% for symbol in symbols %}
+
+{{ gen.render_symbol(symbol, level=level + 1) }}
+{% endfor %}

@@ -1,0 +1,22 @@
+{# Sphinx field list for a CommentModel. Rendered inside a cpp:function (or
+   similar) directive body, the C++ domain turns these into the parameter,
+   template-parameter, return and exception tables of the symbol. #}
+{% macro fields(model) -%}
+{% if model is not none %}
+{% for tparam in model.tparams %}
+:tparam {{ tparam.name }}: {{ tparam.description }}
+{% endfor %}
+{% for param in model.params %}
+:param {{ param.name }}: {{ param.description }}
+{% endfor %}
+{% if model.returns %}
+:returns: {{ model.returns }}
+{% endif %}
+{% for retval in model.retvals %}
+:retval {{ retval.value }}: {{ retval.description }}
+{% endfor %}
+{% for throw in model.throws %}
+:throws {{ throw.exception }}: {{ throw.description }}
+{% endfor %}
+{% endif %}
+{%- endmacro %}

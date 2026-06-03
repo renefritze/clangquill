@@ -52,7 +52,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 requires-python = ">=3.13"
-dependencies = [ "rich", "packaging" , "typer", "click"]
+dependencies = [ "rich", "packaging" , "typer", "click", "jinja2>=3.1"]
 
 [project.optional-dependencies]
 docs = ["sphinx>=6",
