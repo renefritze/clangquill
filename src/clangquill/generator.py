@@ -400,9 +400,12 @@ class Generator:
         for source_file in self.store.files():
             if not roots_by_file.get(source_file.id):
                 continue
-            stem = self._unique_stem(_slug(source_file.path), seen)
+            # The IR stores resolved (absolute) paths; page on the basename so
+            # filenames stay short and do not leak the build machine layout.
+            name = Path(source_file.path).name
+            stem = self._unique_stem(_slug(name), seen)
             (out / f"{stem}.md").write_text(self.render_file(source_file, level=1), encoding="utf-8")
-            pages.append((stem, source_file.path))
+            pages.append((stem, name))
         return pages
 
     @staticmethod

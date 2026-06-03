@@ -103,7 +103,11 @@ def build(  # noqa: PLR0913
     except ConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    result = run_pipeline(config, base_dir=Path.cwd())
+    try:
+        result = run_pipeline(config, base_dir=Path.cwd())
+    except FileNotFoundError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     if result.db_is_temporary:
         result.db_path.unlink(missing_ok=True)
 

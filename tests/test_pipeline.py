@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 from typer.testing import CliRunner
 
-from clangquill import _core, cli
+from clangquill import _core, cli, pipeline
 from clangquill.config import Config
 from clangquill.pipeline import MANIFEST_NAME, build
 
@@ -88,6 +88,34 @@ def test_build_missing_input_raises(project: Path) -> None:
 
 
 @requires_libclang
+def test_build_skips_directories_matched_by_glob(project: Path) -> None:
+    # A glob like ``*`` matches the subdirectory alongside the header; only the
+    # header should be parsed, and the directory must not reach libclang.
+    (project / "sub").mkdir()
+    result = build(Config(input=["*"], output_dir="api"), base_dir=project)
+    assert result.file_count == 1
+    assert not result.diagnostics
+
+
+@requires_libclang
+def test_temp_db_cleaned_up_when_generation_fails(
+    project: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Pin the temp IR to a known path, then make generation fail; the finally
+    # block must remove the throwaway database rather than leak it.
+    db = tmp_path / "scratch.sqlite"
+    monkeypatch.setattr(pipeline, "_db_path", lambda *_, **__: (db, True))
+
+    # An override pointing at a missing template makes generate() raise.
+    config = Config(input=["demo.hpp"], templates={"namespace": "missing_template"})
+    with pytest.raises(Exception, match="missing_template"):
+        build(config, base_dir=project)
+    assert not db.exists()
+
+
+@requires_libclang
 def test_cli_build_from_cwd(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(project)
     runner = CliRunner()
@@ -95,3 +123,13 @@ def test_cli_build_from_cwd(project: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert result.exit_code == 0, result.output
     assert (project / "out" / "demo.md").is_file()
     assert "Wrote 1 page(s)" in result.output
+
+
+def test_cli_build_missing_input_exits_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A no-match input fails with a clean message, not a raw traceback.
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(cli.app, ["build", "absent.hpp"])
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "Error:" in result.output

@@ -71,8 +71,13 @@ def _resolve_inputs(patterns: list[str], base_dir: Path) -> list[str]:
             else:
                 msg = f"clangquill input matched no files: {pattern!r} (under {base_dir})"
                 raise FileNotFoundError(msg)
+        # A glob can match directories (e.g. ``include/*``); only files can be
+        # parsed, so skip the rest rather than handing them to libclang.
         for match in matches:
-            full = str(Path(match).resolve())
+            match_path = Path(match)
+            if not match_path.is_file():
+                continue
+            full = str(match_path.resolve())
             if full not in seen:
                 seen.add(full)
                 resolved.append(full)
@@ -118,21 +123,29 @@ def build(config: Config, *, base_dir: str | Path) -> BuildResult:
     output_dir = (base / config.output_dir).resolve()
 
     db_path, db_is_temporary = _db_path(config, base)
-    result = _core.parse_to_sqlite(inputs, str(db_path), _parse_options(config, base))
-    with Store.open(db_path) as store:
-        generator = Generator(
-            store,
-            template_dirs=[str((base / d).resolve()) for d in config.template_dirs],
-            templates=config.templates,
-            include_undocumented=config.include_undocumented,
-            comment_parser=config.comment_parser,
-        )
-        pages = generator.generate(
-            output_dir,
-            group_by=config.group_by,
-            toctree_maxdepth=config.toctree_maxdepth,
-            root_document=config.root_document,
-        )
+    # On any failure path, drop a throwaway IR so a failed build leaks nothing;
+    # a configured cache_dir database is left in place for inspection.
+    succeeded = False
+    try:
+        result = _core.parse_to_sqlite(inputs, str(db_path), _parse_options(config, base))
+        with Store.open(db_path) as store:
+            generator = Generator(
+                store,
+                template_dirs=[str((base / d).resolve()) for d in config.template_dirs],
+                templates=config.templates,
+                include_undocumented=config.include_undocumented,
+                comment_parser=config.comment_parser,
+            )
+            pages = generator.generate(
+                output_dir,
+                group_by=config.group_by,
+                toctree_maxdepth=config.toctree_maxdepth,
+                root_document=config.root_document,
+            )
+        succeeded = True
+    finally:
+        if not succeeded and db_is_temporary:
+            db_path.unlink(missing_ok=True)
 
     kept = [f"{config.root_document}.md", *(f"{stem}.md" for stem in pages)]
     _prune_stale(output_dir, kept)
