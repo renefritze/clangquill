@@ -24,7 +24,7 @@ from jinja2 import ChoiceLoader, Environment, FileSystemLoader, PackageLoader, S
 from clangquill.store import AccessKind, RefKind, SymbolKind
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from clangquill.comments import CommentModel
     from clangquill.store import Enumerator, Parameter, Reference, SourceFile, Store, Symbol
@@ -131,9 +131,24 @@ class Generator:
         store: Store,
         *,
         template_dirs: Sequence[str | Path] | None = None,
+        templates: Mapping[str, str] | None = None,
+        include_undocumented: bool = True,
+        comment_parser: str | None = None,
     ) -> None:
-        """Bind a store and build the Jinja environment with overrides first."""
+        """Bind a store and build the Jinja environment with overrides first.
+
+        ``templates`` maps a symbol kind (its lowercase :class:`SymbolKind`
+        name, e.g. ``"method"``, or the bundled template stem, e.g. ``"class"``)
+        to a replacement template stem. ``include_undocumented`` controls
+        whether symbols lacking a documentation comment are emitted.
+        ``comment_parser`` overrides the comment format (a registered name or a
+        dotted import path) for every symbol.
+        """
         self.store = store
+        self.include_undocumented = include_undocumented
+        self.comment_parser = comment_parser
+        self._template_overrides = {k.lower(): v for k, v in (templates or {}).items()}
+        self._documented_descendant: dict[str, bool] = {}
         loaders: list[FileSystemLoader | PackageLoader] = []
         if template_dirs:
             loaders.append(FileSystemLoader([str(d) for d in template_dirs]))
@@ -164,12 +179,35 @@ class Generator:
     # -- relation / child queries (thin pass-throughs for templates) ----------
 
     def children(self, symbol: Symbol) -> list[Symbol]:
-        """Return the direct children of ``symbol``."""
-        return self.store.children(symbol.usr)
+        """Return the visible direct children of ``symbol``."""
+        return [c for c in self.store.children(symbol.usr) if self._visible(c)]
 
     def roots(self) -> list[Symbol]:
-        """Return the top-level symbols of the database."""
-        return self.store.roots()
+        """Return the visible top-level symbols of the database."""
+        return [r for r in self.store.roots() if self._visible(r)]
+
+    def _visible(self, symbol: Symbol) -> bool:
+        """Whether ``symbol`` should appear, honouring ``include_undocumented``.
+
+        An undocumented container is still shown when it transitively contains a
+        documented symbol, so suppressing undocumented leaves never hides the
+        scope that holds documented members.
+        """
+        if self.include_undocumented or symbol.is_documented:
+            return True
+        return self._has_documented_descendant(symbol.usr)
+
+    def _has_documented_descendant(self, usr: str) -> bool:
+        cached = self._documented_descendant.get(usr)
+        if cached is not None:
+            return cached
+        # Guard against pathological cycles in malformed IR.
+        self._documented_descendant[usr] = False
+        result = any(
+            child.is_documented or self._has_documented_descendant(child.usr) for child in self.store.children(usr)
+        )
+        self._documented_descendant[usr] = result
+        return result
 
     def parameters(self, symbol: Symbol) -> list[Parameter]:
         """Return the function parameters of ``symbol``."""
@@ -185,7 +223,7 @@ class Generator:
 
     def comment(self, symbol: Symbol) -> CommentModel | None:
         """Return the structured comment for ``symbol``, or ``None``."""
-        return self.store.comment(symbol.usr)
+        return self.store.comment(symbol.usr, parser=self.comment_parser)
 
     # -- presentation helpers -------------------------------------------------
 
@@ -198,8 +236,16 @@ class Generator:
         return _LABEL_FOR.get(symbol.kind, "Symbol")
 
     def template_name(self, symbol: Symbol) -> str:
-        """Return the ``{kind}.md.jinja`` template selected for ``symbol``."""
-        return _TEMPLATE_FOR.get(symbol.kind, "variable")
+        """Return the ``{kind}.md.jinja`` template selected for ``symbol``.
+
+        A ``templates`` override keyed by the kind name (e.g. ``"method"``)
+        wins; failing that one keyed by the bundled stem (e.g. ``"class"``)
+        applies, so an override can target a single kind or a whole family.
+        """
+        base = _TEMPLATE_FOR.get(symbol.kind, "variable")
+        if not self._template_overrides:
+            return base
+        return self._template_overrides.get(symbol.kind.name.lower()) or self._template_overrides.get(base, base)
 
     def base_clause(self, symbol: Symbol) -> str:
         """Return the ``: public Base, …`` clause for a class, or ``""``."""
@@ -308,25 +354,67 @@ class Generator:
         symbols = [s for s in self.roots() if s.file_id == source_file.id]
         return _normalize(template.render(file=source_file, symbols=symbols, level=level))
 
-    def generate(self, out_dir: str | Path) -> list[str]:
-        """Render every root symbol to ``out_dir`` and write a toctree index.
+    def generate(
+        self,
+        out_dir: str | Path,
+        *,
+        group_by: str = "symbol",
+        toctree_maxdepth: int = 2,
+        root_document: str = "index",
+    ) -> list[str]:
+        """Render the IR into ``out_dir`` and write a toctree index.
 
-        Returns the list of page stems written (excluding ``index``).
+        ``group_by`` selects the page partitioning: ``"symbol"`` writes one page
+        per top-level symbol, ``"file"`` one page per parsed source file.
+        ``toctree_maxdepth`` and ``root_document`` shape the generated index
+        page (written as ``<root_document>.md``). Returns the page stems written
+        (excluding the index), in toctree order.
         """
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
-        pages: list[tuple[str, Symbol]] = []
+        pages = self._render_file_pages(out) if group_by == "file" else self._render_symbol_pages(out)
+        index = self.env.get_template("index.md.jinja")
+        (out / f"{root_document}.md").write_text(
+            index.render(pages=pages, maxdepth=toctree_maxdepth),
+            encoding="utf-8",
+        )
+        return [stem for stem, _ in pages]
+
+    def _render_symbol_pages(self, out: Path) -> list[tuple[str, str]]:
+        """Write one page per visible root symbol; return ``(stem, label)`` pairs."""
+        pages: list[tuple[str, str]] = []
         seen: set[str] = set()
         for root in self.roots():
-            stem = _slug(root.qualified_name or root.spelling)
-            while stem in seen:
-                stem += "_"
-            seen.add(stem)
+            stem = self._unique_stem(_slug(root.qualified_name or root.spelling), seen)
             (out / f"{stem}.md").write_text(self.render_symbol(root, level=1), encoding="utf-8")
-            pages.append((stem, root))
-        index = self.env.get_template("index.md.jinja")
-        (out / "index.md").write_text(index.render(pages=pages), encoding="utf-8")
-        return [stem for stem, _ in pages]
+            pages.append((stem, root.qualified_name or root.spelling))
+        return pages
+
+    def _render_file_pages(self, out: Path) -> list[tuple[str, str]]:
+        """Write one page per parsed source file; return ``(stem, label)`` pairs."""
+        pages: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        roots_by_file: dict[int | None, list[Symbol]] = {}
+        for root in self.roots():
+            roots_by_file.setdefault(root.file_id, []).append(root)
+        for source_file in self.store.files():
+            if not roots_by_file.get(source_file.id):
+                continue
+            # The IR stores resolved (absolute) paths; page on the basename so
+            # filenames stay short and do not leak the build machine layout.
+            name = Path(source_file.path).name
+            stem = self._unique_stem(_slug(name), seen)
+            (out / f"{stem}.md").write_text(self.render_file(source_file, level=1), encoding="utf-8")
+            pages.append((stem, name))
+        return pages
+
+    @staticmethod
+    def _unique_stem(stem: str, seen: set[str]) -> str:
+        """Disambiguate ``stem`` against ``seen``, recording the result."""
+        while stem in seen:
+            stem += "_"
+        seen.add(stem)
+        return stem
 
 
 def render_symbol(store: Store, symbol: Symbol, **kwargs: object) -> str:

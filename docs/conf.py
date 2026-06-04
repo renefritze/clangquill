@@ -149,6 +149,11 @@ autoapi_type = 'python'
 autoapi_keep_files = True
 autoapi_template_dir = this_dir / '_templates' / 'autoapi'
 
+# clangquill._core is a compiled nanobind extension, so AutoAPI's static
+# analysis cannot resolve `from clangquill import _core`; that import-resolution
+# warning is expected and would otherwise fail the warning-as-error docs build.
+suppress_warnings = ["autoapi.python_import_resolution"]
+
 coverage_ignore_modules = r"""
     """.split()
 coverage_ignore_functions = r"""

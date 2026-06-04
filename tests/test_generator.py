@@ -122,6 +122,53 @@ def test_user_template_overrides_default_by_name(store: Store, tmp_path: Path) -
     assert "{cpp:class} geo::Shape" in klass
 
 
+def test_include_undocumented_false_drops_leaf_but_keeps_scope(store: Store, tmp_path: Path) -> None:
+    # The geo namespace itself is documented and holds documented members, so it
+    # stays; the undocumented free function geo::mystery is suppressed.
+    gen = Generator(store, include_undocumented=False)
+    rendered = gen.render_symbol(_symbol(store, "geo"), level=1)
+    assert "geo::Circle" in rendered
+    assert "geo::mystery" not in rendered
+
+    pages = gen.generate(tmp_path / "api")
+    assert pages == ["geo"]
+
+
+def test_group_by_file_writes_one_page_per_file(gen: Generator, tmp_path: Path) -> None:
+    out = tmp_path / "api"
+    pages = gen.generate(out, group_by="file")
+    assert pages == ["geo_hpp"]
+    page = (out / "geo_hpp.md").read_text()
+    assert page.startswith("# File `geo.hpp`")
+    assert "geo::Circle" in page
+
+
+def test_templates_override_by_kind(store: Store, tmp_path: Path) -> None:
+    user_dir = tmp_path / "templates"
+    user_dir.mkdir()
+    (user_dir / "tweaked.md.jinja").write_text("TWEAKED {{ symbol.qualified_name }}\n")
+
+    gen = Generator(store, template_dirs=[user_dir], templates={"function": "tweaked"})
+    # Free functions and methods both resolve to the "function" stem, so both
+    # pick up the override keyed by kind name.
+    assert gen.render_symbol(_symbol(store, "geo::scale")).strip() == "TWEAKED geo::scale"
+    # Classes are unaffected.
+    assert "{cpp:class} geo::Shape" in gen.render_symbol(_symbol(store, "geo::Shape"))
+
+
+def test_toctree_maxdepth_is_honoured(gen: Generator, tmp_path: Path) -> None:
+    out = tmp_path / "api"
+    gen.generate(out, toctree_maxdepth=4)
+    assert ":maxdepth: 4" in (out / "index.md").read_text()
+
+
+def test_root_document_renames_index(gen: Generator, tmp_path: Path) -> None:
+    out = tmp_path / "api"
+    gen.generate(out, root_document="contents")
+    assert (out / "contents.md").is_file()
+    assert not (out / "index.md").exists()
+
+
 def test_rendered_myst_builds_as_cpp_domain_objects(gen: Generator, tmp_path: Path) -> None:
     sphinx = pytest.importorskip("sphinx")
     pytest.importorskip("myst_parser")
