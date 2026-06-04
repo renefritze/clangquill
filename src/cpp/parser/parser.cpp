@@ -44,6 +44,18 @@ void record_file(const std::string& path, model::ParsedModule& out) {
   out.files.push_back(std::move(file));
 }
 
+// libclang inclusion visitor: records every file pulled into the translation
+// unit (the main file plus everything it transitively `#include`s) so the M6
+// cache can invalidate a re-parse when any tracked dependency changes.
+void record_inclusion(CXFile included_file, CXSourceLocation* /*stack*/,
+                      unsigned /*len*/, CXClientData data) {
+  auto& out = *static_cast<model::ParsedModule*>(data);
+  CXString name = clang_getFileName(included_file);
+  const char* cstr = clang_getCString(name);
+  if (cstr != nullptr && cstr[0] != '\0') record_file(cstr, out);
+  clang_disposeString(name);
+}
+
 }  // namespace
 
 Parser::Parser(ParseOptions options) : options_(std::move(options)) {
@@ -111,6 +123,9 @@ bool Parser::parse_file(const std::string& path, model::ParsedModule& out) {
   }
 
   record_file(path, out);
+  // Track transitive #include dependencies so a header edit invalidates the
+  // cached parse for every translation unit that pulled it in.
+  clang_getInclusions(tu, record_inclusion, &out);
   visit_translation_unit(clang_getTranslationUnitCursor(tu), path, out);
 
   return true;

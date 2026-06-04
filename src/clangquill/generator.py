@@ -16,6 +16,7 @@ builders, and the child/relation queries.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -117,6 +118,20 @@ def _slug(name: str) -> str:
 def _normalize(text: str) -> str:
     """Collapse runs of blank lines and guarantee a single trailing newline."""
     return _BLANKS_RE.sub("\n\n", text).strip("\n") + "\n"
+
+
+@dataclass(frozen=True)
+class RenderedPage:
+    """One rendered output page held in memory before it is written.
+
+    ``stem`` is the filename without extension, ``label`` the human-readable
+    toctree caption, and ``text`` the full MyST content. Keeping the content
+    separate from the write lets the pipeline hash it and skip unchanged pages.
+    """
+
+    stem: str
+    label: str
+    text: str
 
 
 class Generator:
@@ -354,6 +369,26 @@ class Generator:
         symbols = [s for s in self.roots() if s.file_id == source_file.id]
         return _normalize(template.render(file=source_file, symbols=symbols, level=level))
 
+    def render_pages(self, *, group_by: str = "symbol") -> list[RenderedPage]:
+        """Render every page in memory without writing, in toctree order.
+
+        ``group_by`` selects the page partitioning: ``"symbol"`` yields one page
+        per top-level symbol, ``"file"`` one page per parsed source file. The
+        caller decides how (and whether) to persist each :class:`RenderedPage`,
+        which is what lets the incremental pipeline skip unchanged outputs.
+        """
+        return self._render_file_pages() if group_by == "file" else self._render_symbol_pages()
+
+    def render_index(
+        self,
+        pages: Sequence[RenderedPage],
+        *,
+        toctree_maxdepth: int = 2,
+    ) -> str:
+        """Render the toctree index page that links ``pages`` in order."""
+        index = self.env.get_template("index.md.jinja")
+        return index.render(pages=[(p.stem, p.label) for p in pages], maxdepth=toctree_maxdepth)
+
     def generate(
         self,
         out_dir: str | Path,
@@ -372,27 +407,27 @@ class Generator:
         """
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
-        pages = self._render_file_pages(out) if group_by == "file" else self._render_symbol_pages(out)
-        index = self.env.get_template("index.md.jinja")
+        pages = self.render_pages(group_by=group_by)
+        for page in pages:
+            (out / f"{page.stem}.md").write_text(page.text, encoding="utf-8")
         (out / f"{root_document}.md").write_text(
-            index.render(pages=pages, maxdepth=toctree_maxdepth),
+            self.render_index(pages, toctree_maxdepth=toctree_maxdepth),
             encoding="utf-8",
         )
-        return [stem for stem, _ in pages]
+        return [page.stem for page in pages]
 
-    def _render_symbol_pages(self, out: Path) -> list[tuple[str, str]]:
-        """Write one page per visible root symbol; return ``(stem, label)`` pairs."""
-        pages: list[tuple[str, str]] = []
+    def _render_symbol_pages(self) -> list[RenderedPage]:
+        """Render one page per visible root symbol."""
+        pages: list[RenderedPage] = []
         seen: set[str] = set()
         for root in self.roots():
             stem = self._unique_stem(_slug(root.qualified_name or root.spelling), seen)
-            (out / f"{stem}.md").write_text(self.render_symbol(root, level=1), encoding="utf-8")
-            pages.append((stem, root.qualified_name or root.spelling))
+            pages.append(RenderedPage(stem, root.qualified_name or root.spelling, self.render_symbol(root, level=1)))
         return pages
 
-    def _render_file_pages(self, out: Path) -> list[tuple[str, str]]:
-        """Write one page per parsed source file; return ``(stem, label)`` pairs."""
-        pages: list[tuple[str, str]] = []
+    def _render_file_pages(self) -> list[RenderedPage]:
+        """Render one page per parsed source file that declares a root symbol."""
+        pages: list[RenderedPage] = []
         seen: set[str] = set()
         roots_by_file: dict[int | None, list[Symbol]] = {}
         for root in self.roots():
@@ -404,8 +439,7 @@ class Generator:
             # filenames stay short and do not leak the build machine layout.
             name = Path(source_file.path).name
             stem = self._unique_stem(_slug(name), seen)
-            (out / f"{stem}.md").write_text(self.render_file(source_file, level=1), encoding="utf-8")
-            pages.append((stem, name))
+            pages.append(RenderedPage(stem, name, self.render_file(source_file, level=1)))
         return pages
 
     @staticmethod
@@ -427,4 +461,4 @@ def generate(store: Store, out_dir: str | Path, **kwargs: object) -> list[str]:
     return Generator(store, **kwargs).generate(out_dir)  # type: ignore[arg-type]
 
 
-__all__ = ["Generator", "generate", "render_symbol"]
+__all__ = ["Generator", "RenderedPage", "generate", "render_symbol"]
