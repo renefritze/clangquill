@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -107,9 +107,19 @@ class BuildCache:
         """
         directory = Path(cache_dir)
         directory.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(directory / cls.FILENAME)
+        cache_file = directory / cls.FILENAME
         try:
+            con = sqlite3.connect(cache_file)
             con.executescript(_SCHEMA)
+        except sqlite3.DatabaseError:
+            # A corrupted cache (interrupted write, bad disk) must not wedge every
+            # future build: discard it and start clean rather than propagate.
+            with suppress(sqlite3.Error):
+                con.close()
+            cache_file.unlink(missing_ok=True)
+            con = sqlite3.connect(cache_file)
+            con.executescript(_SCHEMA)
+        try:
             cache = cls(con)
             if cache._meta("cache_version") != str(CACHE_VERSION):
                 cache.reset()

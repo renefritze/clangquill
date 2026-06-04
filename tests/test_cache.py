@@ -61,6 +61,18 @@ def test_outputs_round_trip_and_replacement(tmp_path: Path) -> None:
         assert cache.outputs() == {"a.md": "h1b"}
 
 
+def test_corrupted_cache_is_discarded_and_rebuilt(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    # A garbage file where the SQLite database is expected must not wedge builds.
+    (cache_dir / BuildCache.FILENAME).write_bytes(b"not a sqlite database at all")
+    with BuildCache.open(cache_dir) as cache:
+        assert cache.outputs() == {}
+        cache.record_outputs({"a.md": "h1"})
+    with BuildCache.open(cache_dir) as cache:
+        assert cache.outputs() == {"a.md": "h1"}
+
+
 def test_version_mismatch_resets_cache(tmp_path: Path) -> None:
     cache_dir = tmp_path / "cache"
     with BuildCache.open(cache_dir) as cache:

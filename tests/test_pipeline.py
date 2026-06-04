@@ -130,6 +130,21 @@ def test_incremental_deletes_pages_for_removed_symbols(project: Path) -> None:
     assert "alpha.md" not in result.pages_written
 
 
+def test_parse_fingerprint_tracks_compile_commands_file(tmp_path: Path) -> None:
+    # ``compile_commands`` is a directory; the fingerprint must follow the JSON
+    # file inside it so edits to the compile DB invalidate the cached parse.
+    cc_dir = tmp_path / "build"
+    cc_dir.mkdir()
+    db = cc_dir / "compile_commands.json"
+    db.write_text("[]", encoding="utf-8")
+    config = Config(input=["a.hpp"], compile_commands="build")
+
+    before = pipeline._parse_fingerprint(config, tmp_path, ["a.hpp"])  # noqa: SLF001
+    db.write_text('[{"directory": ".", "command": "c++ a.cpp", "file": "a.cpp"}]', encoding="utf-8")
+    after = pipeline._parse_fingerprint(config, tmp_path, ["a.hpp"])  # noqa: SLF001
+    assert before != after
+
+
 @requires_libclang
 def test_incremental_reparses_when_included_header_changes(project: Path) -> None:
     (project / "detail.hpp").write_text("#pragma once\nusing Width = int;\n")

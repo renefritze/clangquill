@@ -128,7 +128,10 @@ def _parse_fingerprint(config: Config, base_dir: Path, inputs: list[str]) -> str
     """
     compile_commands_hash = ""
     if config.compile_commands:
-        cc = (base_dir / config.compile_commands).resolve()
+        # ``compile_commands`` names the *directory* holding compile_commands.json
+        # (it is handed to clang_CompilationDatabase_fromDirectory), so hash the
+        # JSON file inside it rather than the directory.
+        cc = (base_dir / config.compile_commands / "compile_commands.json").resolve()
         try:
             compile_commands_hash = file_sha256(cc)
         except OSError:
