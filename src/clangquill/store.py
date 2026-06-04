@@ -226,6 +226,14 @@ class Store:
         """Return the number of rows in the ``symbols`` table."""
         return int(self._con.execute("SELECT count(*) FROM symbols").fetchone()[0])
 
+    def reference_count(self) -> int:
+        """Return the number of rows in the ``references_`` table."""
+        return int(self._con.execute("SELECT count(*) FROM references_").fetchone()[0])
+
+    def file_count(self) -> int:
+        """Return the number of rows in the ``files`` table."""
+        return int(self._con.execute("SELECT count(*) FROM files").fetchone()[0])
+
     def parameters(self, function_usr: str) -> list[Parameter]:
         """Return the parameters of a function/method in positional order."""
         rows = self._con.execute(

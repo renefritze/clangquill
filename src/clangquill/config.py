@@ -61,7 +61,10 @@ class Config:
     template_dirs: list[str] = field(default_factory=list)
     #: Per-kind template overrides, e.g. ``{"class": "my_class"}``.
     templates: dict[str, str] = field(default_factory=dict)
-    #: Where the SQLite IR is cached; ``None`` uses a throwaway temp file.
+    #: Directory holding the persistent cache that makes rebuilds incremental
+    #: (reuse the parse and rewrite only changed pages). ``None`` disables
+    #: caching: each build re-parses into a throwaway temp file and rewrites
+    #: every page.
     cache_dir: str | None = None
     #: Emit pages/sections for symbols that carry no documentation comment.
     include_undocumented: bool = True

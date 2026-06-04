@@ -63,6 +63,92 @@ def test_build_caches_db_when_cache_dir_set(project: Path) -> None:
     assert result.db_path.parent == (project / ".cache").resolve()
 
 
+def _mtimes(api: Path) -> dict[str, float]:
+    return {p.name: p.stat().st_mtime_ns for p in api.glob("*.md")}
+
+
+@requires_libclang
+def test_incremental_unchanged_build_regenerates_nothing(project: Path) -> None:
+    config = Config(input=["demo.hpp"], output_dir="api", cache_dir=".cache")
+    first = build(config, base_dir=project)
+    assert first.parsed
+    assert first.pages_written  # the first run writes every page
+
+    api = project / "api"
+    before = _mtimes(api)
+    second = build(config, base_dir=project)
+
+    # Nothing changed: the parse is served from cache and no page is rewritten.
+    assert not second.parsed
+    assert second.pages_written == []
+    assert second.pages_deleted == []
+    assert _mtimes(api) == before
+
+
+@requires_libclang
+def test_incremental_touch_header_regenerates_only_affected(project: Path) -> None:
+    (project / "alpha.hpp").write_text("/// alpha ns\nnamespace alpha { /// f\nint f(); }\n")
+    (project / "beta.hpp").write_text("/// beta ns\nnamespace beta { /// g\nint g(); }\n")
+    config = Config(input=["alpha.hpp", "beta.hpp"], output_dir="api", cache_dir=".cache")
+    build(config, base_dir=project)
+
+    api = project / "api"
+    before = _mtimes(api)
+
+    # Edit only alpha.hpp's documentation; beta and the toctree are untouched.
+    (project / "alpha.hpp").write_text("/// alpha ns edited\nnamespace alpha { /// f\nint f(); }\n")
+    result = build(config, base_dir=project)
+
+    assert result.parsed
+    assert result.pages_written == ["alpha.md"]
+    assert result.pages_deleted == []
+    after = _mtimes(api)
+    assert after["alpha.md"] != before["alpha.md"]
+    assert after["beta.md"] == before["beta.md"]
+    assert after["index.md"] == before["index.md"]
+
+
+@requires_libclang
+def test_incremental_deletes_pages_for_removed_symbols(project: Path) -> None:
+    header = project / "two.hpp"
+    header.write_text("/// alpha\nnamespace alpha { /// f\nint f(); }\n/// beta\nnamespace beta { /// g\nint g(); }\n")
+    config = Config(input=["two.hpp"], output_dir="api", cache_dir=".cache")
+    build(config, base_dir=project)
+    api = project / "api"
+    assert (api / "alpha.md").is_file()
+    assert (api / "beta.md").is_file()
+
+    # Drop the beta namespace entirely; its page must be deleted.
+    header.write_text("/// alpha\nnamespace alpha { /// f\nint f(); }\n")
+    result = build(config, base_dir=project)
+
+    assert result.pages_deleted == ["beta.md"]
+    assert not (api / "beta.md").exists()
+    assert (api / "alpha.md").is_file()
+    # The toctree shrank, so the index is rewritten; alpha's page did not change.
+    assert "index.md" in result.pages_written
+    assert "alpha.md" not in result.pages_written
+
+
+@requires_libclang
+def test_incremental_reparses_when_included_header_changes(project: Path) -> None:
+    (project / "detail.hpp").write_text("#pragma once\nusing Width = int;\n")
+    (project / "main.hpp").write_text('#include "detail.hpp"\n/// uses detail\nnamespace m { /// w\nWidth w(); }\n')
+    config = Config(input=["main.hpp"], output_dir="api", cache_dir=".cache")
+
+    first = build(config, base_dir=project)
+    assert first.parsed
+    # The transitive include is tracked, so it counts as a parsed source file.
+    assert first.file_count >= 2
+
+    # Rebuild with nothing touched -> cache hit, no parse.
+    assert not build(config, base_dir=project).parsed
+
+    # Touching the *included* header invalidates the cached parse.
+    (project / "detail.hpp").write_text("#pragma once\nusing Width = unsigned;\n")
+    assert build(config, base_dir=project).parsed
+
+
 @requires_libclang
 def test_build_prunes_stale_pages(project: Path) -> None:
     # First build with one input produces demo.md.
@@ -106,7 +192,7 @@ def test_temp_db_cleaned_up_when_generation_fails(
     # Pin the temp IR to a known path, then make generation fail; the finally
     # block must remove the throwaway database rather than leak it.
     db = tmp_path / "scratch.sqlite"
-    monkeypatch.setattr(pipeline, "_db_path", lambda *_, **__: (db, True))
+    monkeypatch.setattr(pipeline, "_new_temp_db", lambda *_, **__: db)
 
     # An override pointing at a missing template makes generate() raise.
     config = Config(input=["demo.hpp"], templates={"namespace": "missing_template"})

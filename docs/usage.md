@@ -83,6 +83,29 @@ Run `clangquill build --help` for the full set of options, which mirror the
 `clangquill_*` config values.
 
 
+## Incremental builds
+
+Set `clangquill_cache_dir` to make rebuilds incremental. clangquill then keeps
+the SQLite IR and a small bookkeeping cache in that directory between runs and:
+
+- **skips the parse** when no input — or transitively `#include`d header —
+  changed, reusing the cached IR instead of invoking libclang again;
+- **rewrites only the pages whose content changed**, comparing each rendered
+  page against the hash recorded for the previous run; and
+- **deletes pages whose symbols disappeared**, so removing a declaration removes
+  its Markdown.
+
+```python
+# conf.py
+clangquill_cache_dir = "_clangquill_cache"   # under the Sphinx srcdir
+```
+
+Re-running an unchanged build therefore regenerates nothing, touching one header
+regenerates only the affected pages, and a removed symbol's page is cleaned up.
+Without a cache directory the build is stateless: it re-parses into a throwaway
+database and rewrites every page each time.
+
+
 ## Example notebooks statistics
 
 ```{nb-exec-table}
