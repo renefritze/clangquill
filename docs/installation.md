@@ -19,6 +19,16 @@ This is the preferred method to install clangquill, as it will always install th
 If you don't have [pip][pip] installed, this [Python installation guide][python installation guide] can guide
 you through the process.
 
+```{note}
+**Bundled libclang.** The Linux wheels bundle a self-contained **libclang 20**
+(from the official LLVM release), so parsing works out of the box with no system
+LLVM required — `c++20`/`c++23`/`c++26` are all supported (see the
+[`std` configuration note](guides/configuration.md)). Because that libclang
+needs **glibc ≥ 2.34** (manylinux_2_34), the wheels install on reasonably recent
+Linux distributions; on older systems, build from source against your own
+libclang instead.
+```
+
 [pip]: https://pip.pypa.io
 
 [python installation guide]: http://docs.python-guide.org/en/latest/starting/installation/
