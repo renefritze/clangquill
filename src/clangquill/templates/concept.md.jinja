@@ -1,7 +1,11 @@
-{# Concepts have no dedicated SymbolKind in the IR yet; this template is a
-   ready customization seam for the C++ domain `cpp:concept` object. #}
+{% import "partials/signature.md.jinja" as sig %}
 {% set comment = gen.comment(symbol) %}
-```{cpp:concept} {{ symbol.signature or symbol.qualified_name }}
+{% set fields = field_list(comment) %}
+```{{ "{" ~ gen.directive(symbol) ~ "}" }} {{ sig.directive_argument(symbol) }}
 
 {{ render_comment(comment) }}
+{% if fields %}
+
+{{ fields }}
+{% endif %}
 ```

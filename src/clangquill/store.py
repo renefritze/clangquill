@@ -40,6 +40,8 @@ class SymbolKind(IntEnum):
     TYPE_ALIAS = 14
     FUNCTION_TEMPLATE = 15
     CLASS_TEMPLATE = 16
+    CONCEPT = 17
+    MACRO = 18
 
 
 class AccessKind(IntEnum):
@@ -61,6 +63,7 @@ class RefKind(IntEnum):
     VARIABLE_TYPE = 4
     UNDERLYING_TYPE = 5
     ENUM_INTEGER_TYPE = 6
+    FRIEND = 7
 
 
 @dataclass(frozen=True)
@@ -151,6 +154,17 @@ class SourceFile:
     path: str
     sha256: str
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class Group:
+    r"""A row from the ``groups`` table: a Doxygen ``\defgroup`` group."""
+
+    id: str
+    title: str
+    brief: str
+    detail: str
+    parent_group_id: str
 
 
 class Store:
@@ -282,6 +296,59 @@ class Store:
     def bases(self, usr: str) -> list[Reference]:
         """Return the base-class references of ``usr`` in declaration order."""
         return self.references(usr, kind=RefKind.BASE_CLASS)
+
+    def friends(self, usr: str) -> list[Reference]:
+        """Return the friend references of a record ``usr`` in declaration order."""
+        return self.references(usr, kind=RefKind.FRIEND)
+
+    def _to_group(self, row: sqlite3.Row) -> Group:
+        return Group(
+            id=row["id"],
+            title=row["title"],
+            brief=row["brief"],
+            detail=row["detail"],
+            parent_group_id=row["parent_group_id"] or "",
+        )
+
+    def groups(self) -> list[Group]:
+        """Return every documentation group, ordered by title then id."""
+        rows = self._con.execute(
+            "SELECT id, title, brief, detail, parent_group_id FROM groups ORDER BY title, id",
+        ).fetchall()
+        return [self._to_group(row) for row in rows]
+
+    def group(self, group_id: str) -> Group | None:
+        """Return the group with ``group_id``, or ``None`` if unknown."""
+        row = self._con.execute(
+            "SELECT id, title, brief, detail, parent_group_id FROM groups WHERE id = ?",
+            (group_id,),
+        ).fetchone()
+        return self._to_group(row) if row is not None else None
+
+    def root_groups(self) -> list[Group]:
+        """Return groups that are not nested under another group."""
+        rows = self._con.execute(
+            "SELECT id, title, brief, detail, parent_group_id FROM groups "
+            "WHERE parent_group_id IS NULL OR parent_group_id = '' ORDER BY title, id",
+        ).fetchall()
+        return [self._to_group(row) for row in rows]
+
+    def subgroups(self, parent_group_id: str) -> list[Group]:
+        """Return the groups nested directly under ``parent_group_id``."""
+        rows = self._con.execute(
+            "SELECT id, title, brief, detail, parent_group_id FROM groups WHERE parent_group_id = ? ORDER BY title, id",
+            (parent_group_id,),
+        ).fetchall()
+        return [self._to_group(row) for row in rows]
+
+    def group_members(self, group_id: str) -> list[str]:
+        """Return the member symbol USRs of ``group_id`` in declaration order."""
+        rows = self._con.execute(
+            "SELECT member_usr FROM group_members WHERE group_id = ? "
+            "AND member_usr IS NOT NULL AND member_usr != '' ORDER BY ordinal",
+            (group_id,),
+        ).fetchall()
+        return [row["member_usr"] for row in rows]
 
     def files(self) -> list[SourceFile]:
         """Return all parsed source files ordered by path."""

@@ -1,7 +1,11 @@
-{# Preprocessor macros have no SymbolKind in the IR yet; this template is a
-   ready customization seam. C macros live in the C domain (`c:macro`). #}
+{% import "partials/signature.md.jinja" as sig %}
 {% set comment = gen.comment(symbol) %}
-```{c:macro} {{ symbol.signature or symbol.spelling }}
+{% set fields = field_list(comment) %}
+```{{ "{" ~ gen.directive(symbol) ~ "}" }} {{ sig.directive_argument(symbol) }}
 
 {{ render_comment(comment) }}
+{% if fields %}
+
+{{ fields }}
+{% endif %}
 ```

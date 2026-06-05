@@ -20,6 +20,10 @@ class DoxygenCommentParser : public ICommentParser {
   std::string format() const override { return "doxygen"; }
   model::CommentModel parse(CXCursor cursor,
                             const std::string& raw) const override;
+
+  // Parses a comment from its raw text alone (no cursor / parsed CXComment).
+  // Used to recover free-floating `\defgroup` blocks that attach to no cursor.
+  static model::CommentModel parse_raw_text(const std::string& raw);
 };
 
 }  // namespace clangquill::parser

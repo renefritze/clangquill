@@ -183,9 +183,113 @@ def _build_fixture_db(path: Path) -> None:
         con.close()
 
 
+def _build_m7_db(path: Path) -> None:
+    r"""Populate ``path`` with the M7 kinds.
+
+    Covers a class template (with a defaulted non-type parameter), a concept,
+    object- and function-like macros, a struct with documented and undocumented
+    friends, and a ``\defgroup`` group with members.
+    """
+    con = sqlite3.connect(path)
+    try:
+        con.executescript(_schema_ddl())
+        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', '2')")
+        con.execute("INSERT INTO files(id, path, sha256, size_bytes) VALUES(1, 'm7.hpp', 'cafef00d', 256)")
+
+        def sym(  # noqa: PLR0913
+            usr: str,
+            parent: str,
+            kind: int,
+            spelling: str,
+            qname: str,
+            *,
+            signature: str = "",
+            type_repr: str = "",
+        ) -> None:
+            con.execute(
+                "INSERT INTO symbols(usr, parent_usr, kind, spelling, qualified_name, "
+                "display_name, signature, type_repr, access, is_definition, "
+                "is_documented, content_hash, file_id, line) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 1, ?, 1, 0)",
+                (usr, parent, kind, spelling, qname, qname, signature, type_repr, "hash-" + usr),
+            )
+
+        ns = "c:@N@nn"
+        box = "c:@N@nn@ST>2#T#NI@Box"
+        addable = "c:@N@nn@CT@Addable"
+        pi = "c:@macro@PI"
+        maxm = "c:@macro@MAXM"
+        pt = "c:@N@nn@S@Pt"
+        helper = "c:@N@nn@F@helper"
+
+        sym(ns, "", 1, "nn", "nn")
+        sym(box, ns, 16, "Box", "nn::Box", signature="template<typename T, int N = 4>")
+        sym(addable, ns, 17, "Addable", "nn::Addable", signature="template<typename T>")
+        sym(pi, "", 18, "PI", "PI", signature="PI")
+        sym(maxm, "", 18, "MAXM", "MAXM", signature="MAXM(a, b)")
+        sym(pt, ns, 3, "Pt", "nn::Pt")
+        sym(helper, ns, 5, "helper", "nn::helper", signature="void helper()", type_repr="void ()")
+
+        # Friends: one points at a documented symbol (nn::helper), one is an
+        # out-of-TU entity that must degrade to inline code.
+        con.executemany(
+            "INSERT INTO references_(from_usr, ref_kind, to_usr, to_spelling, is_resolved, access, ordinal) VALUES(?, 7, ?, ?, ?, 0, ?)",
+            [
+                (pt, helper, "nn::helper", 1, 0),
+                (pt, "", "Outsider", 0, 1),
+            ],
+        )
+
+        con.executemany(
+            "INSERT INTO template_parameters(owner_usr, idx, param_kind, name, type_repr, default_repr) VALUES(?, ?, ?, ?, ?, ?)",
+            [
+                (box, 0, 0, "T", "", ""),
+                (box, 1, 1, "N", "int", "4"),
+                (addable, 0, 0, "T", "", ""),
+            ],
+        )
+
+        con.execute(
+            "INSERT INTO groups(id, title, brief, detail, parent_group_id) VALUES('grp', 'Grouped API', 'A documented group.', '', NULL)",
+        )
+        con.executemany(
+            "INSERT INTO group_members(group_id, member_usr, ordinal) VALUES('grp', ?, ?)",
+            [(box, 0), (helper, 1)],
+        )
+
+        for usr, brief in (
+            (ns, "A namespace."),
+            (box, "A box."),
+            (addable, "Addable types."),
+            (pi, "Pi."),
+            (maxm, "Max macro."),
+            (pt, "A point."),
+            (helper, "A helper."),
+        ):
+            con.execute(
+                "INSERT INTO comments(symbol_usr, raw_text, format, fields_json) VALUES(?, '/// fixture', 'doxygen', '')",
+                (usr,),
+            )
+            con.execute(
+                "INSERT INTO comment_fields(symbol_usr, name, arg, value, ordinal) VALUES(?, 'brief', '', ?, 0)",
+                (usr, brief),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+
 @pytest.fixture
 def fixture_db(tmp_path: Path) -> Path:
     """Return the path to a freshly built fixture IR database."""
     path = tmp_path / "geo.sqlite"
     _build_fixture_db(path)
+    return path
+
+
+@pytest.fixture
+def m7_db(tmp_path: Path) -> Path:
+    """Return the path to a fixture IR database exercising the M7 kinds."""
+    path = tmp_path / "m7.sqlite"
+    _build_m7_db(path)
     return path

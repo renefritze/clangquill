@@ -1,0 +1,27 @@
+{% set members = gen.group_symbols(group) %}
+{% set subs = gen.subgroups(group) %}
+{{ "#" * level }} {{ group.title or group.id }}
+
+{% if group.brief %}
+{{ group.brief }}
+{% endif %}
+{% if group.detail %}
+
+{{ group.detail }}
+{% endif %}
+{% if subs %}
+
+**Subgroups**
+
+{% for sub in subs %}
+- {{ "{doc}" }}`{{ gen.group_stem(sub) }}`
+{% endfor %}
+{% endif %}
+{% if members %}
+
+**Members**
+
+{% for member in members %}
+- {{ xref(member) }}
+{% endfor %}
+{% endif %}

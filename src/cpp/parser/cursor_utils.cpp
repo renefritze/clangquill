@@ -38,6 +38,10 @@ model::SymbolKind map_kind(CXCursorKind kind) {
     case CXCursor_TypeAliasDecl:
     case CXCursor_TypeAliasTemplateDecl:
       return model::SymbolKind::TypeAlias;
+    case CXCursor_ConceptDecl:
+      return model::SymbolKind::Concept;
+    case CXCursor_MacroDefinition:
+      return model::SymbolKind::Macro;
     default:
       return model::SymbolKind::Unknown;
   }
@@ -73,6 +77,151 @@ std::string pretty_signature(CXCursor c) {
                                    1);
   std::string out = to_string(clang_getCursorPrettyPrinted(c, policy));
   clang_PrintingPolicy_dispose(policy);
+  return out;
+}
+
+namespace {
+
+// Collects the spellings of every token covering a cursor's extent, in order.
+std::vector<std::string> cursor_tokens(CXCursor c) {
+  std::vector<std::string> out;
+  CXTranslationUnit tu = clang_Cursor_getTranslationUnit(c);
+  CXSourceRange range = clang_getCursorExtent(c);
+  CXToken* tokens = nullptr;
+  unsigned count = 0;
+  clang_tokenize(tu, range, &tokens, &count);
+  out.reserve(count);
+  for (unsigned i = 0; i < count; ++i) {
+    out.push_back(to_string(clang_getTokenSpelling(tu, tokens[i])));
+  }
+  if (tokens != nullptr) clang_disposeTokens(tu, tokens, count);
+  return out;
+}
+
+// Joins a token onto a buffer, inserting a single space unless the buffer is
+// empty. Keeps reconstructed text readable without faithfully reproducing the
+// original spacing (which libclang does not preserve in tokens).
+void append_token(std::string& buf, const std::string& tok) {
+  if (!buf.empty()) buf += ' ';
+  buf += tok;
+}
+
+}  // namespace
+
+std::string macro_signature(CXCursor c) {
+  std::string name = spelling(c);
+  if (clang_Cursor_isMacroFunctionLike(c) == 0) return name;
+  // Function-like: rebuild "NAME(a, b)" from the leading tokens up to the close
+  // paren that matches the first one (the body, if any, follows and is ignored).
+  std::vector<std::string> toks = cursor_tokens(c);
+  std::string params;
+  int depth = 0;
+  bool started = false;
+  for (const std::string& t : toks) {
+    if (!started) {
+      if (t == "(") {
+        started = true;
+        depth = 1;
+      }
+      continue;
+    }
+    if (t == "(") {
+      ++depth;
+      params += t;
+    } else if (t == ")") {
+      if (--depth == 0) break;
+      params += t;
+    } else if (t == ",") {
+      params += ", ";
+    } else {
+      params += t;
+    }
+  }
+  return started ? name + "(" + params + ")" : name;
+}
+
+std::string template_head(CXCursor owner,
+                          std::vector<std::string>* defaults_out) {
+  std::vector<std::string> toks = cursor_tokens(owner);
+  std::vector<std::string> segs;      // full text per top-level parameter
+  std::vector<std::string> defaults;  // default text (after top-level '=')
+  std::string cur, cur_default;
+  bool started = false, done = false, in_default = false;
+  int depth = 0;
+
+  auto push_seg = [&]() {
+    segs.push_back(cur);
+    defaults.push_back(cur_default);
+    cur.clear();
+    cur_default.clear();
+    in_default = false;
+  };
+
+  for (const std::string& t : toks) {
+    if (done) break;
+    if (!started) {
+      if (t == "template") started = true;
+      continue;
+    }
+    if (depth == 0) {
+      if (t == "<") {
+        depth = 1;
+        continue;
+      }
+      break;  // tokens before the '<' that are not 'template' end the head
+    }
+    if (t == "<") {
+      ++depth;
+      append_token(cur, t);
+      if (in_default) append_token(cur_default, t);
+    } else if (t == ">") {
+      if (--depth == 0) {
+        push_seg();
+        done = true;
+      } else {
+        append_token(cur, t);
+        if (in_default) append_token(cur_default, t);
+      }
+    } else if (t == "," && depth == 1) {
+      push_seg();
+    } else if (t == "=" && depth == 1) {
+      append_token(cur, t);
+      in_default = true;
+    } else {
+      append_token(cur, t);
+      if (in_default) append_token(cur_default, t);
+    }
+  }
+
+  if (!started || segs.empty() || (segs.size() == 1 && segs.front().empty())) {
+    if (defaults_out != nullptr) defaults_out->clear();
+    return "";
+  }
+  if (defaults_out != nullptr) *defaults_out = defaults;
+
+  std::string head = "template<";
+  for (std::size_t i = 0; i < segs.size(); ++i) {
+    if (i != 0) head += ", ";
+    head += segs[i];
+  }
+  head += '>';
+  return head;
+}
+
+std::string param_default(CXCursor param) {
+  std::vector<std::string> toks = cursor_tokens(param);
+  std::string out;
+  bool seen = false;
+  int depth = 0;
+  for (const std::string& t : toks) {
+    if (!seen) {
+      if (t == "=" && depth == 0) seen = true;
+      else if (t == "(" || t == "[" || t == "{" || t == "<") ++depth;
+      else if (t == ")" || t == "]" || t == "}" || t == ">") --depth;
+      continue;
+    }
+    append_token(out, t);
+  }
   return out;
 }
 

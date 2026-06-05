@@ -197,6 +197,42 @@ void SqliteStore::write(const model::ParsedModule& module, const Meta& meta) {
     }
   }
 
+  {
+    Stmt g(db_,
+           "INSERT OR REPLACE INTO groups(id, title, brief, detail, "
+           "parent_group_id) VALUES(?,?,?,?,?);");
+    for (const auto& grp : module.groups) {
+      g.reset();
+      g.bind(1, grp.id);
+      g.bind(2, grp.title);
+      g.bind(3, grp.brief);
+      g.bind(4, grp.detail);
+      if (grp.parent_group_id.empty()) {
+        g.bind_null(5);
+      } else {
+        g.bind(5, grp.parent_group_id);
+      }
+      g.step();
+    }
+  }
+
+  {
+    Stmt gm(db_,
+            "INSERT INTO group_members(group_id, member_usr, ordinal) "
+            "VALUES(?,?,?);");
+    for (const auto& member : module.group_members) {
+      gm.reset();
+      gm.bind(1, member.group_id);
+      if (member.member_usr.empty()) {
+        gm.bind_null(2);
+      } else {
+        gm.bind(2, member.member_usr);
+      }
+      gm.bind(3, member.ordinal);
+      gm.step();
+    }
+  }
+
   tx.commit();
 }
 
@@ -337,6 +373,34 @@ model::ParsedModule SqliteStore::read() {
       field.value = cf.column_text(3);
       field.ordinal = static_cast<int>(cf.column_int64(4));
       m.comment_fields.push_back(std::move(field));
+    }
+  }
+
+  {
+    Stmt g(db_,
+           "SELECT id, title, brief, detail, parent_group_id FROM groups "
+           "ORDER BY id;");
+    while (g.step()) {
+      model::Group grp;
+      grp.id = g.column_text(0);
+      grp.title = g.column_text(1);
+      grp.brief = g.column_text(2);
+      grp.detail = g.column_text(3);
+      grp.parent_group_id = g.column_text(4);
+      m.groups.push_back(std::move(grp));
+    }
+  }
+
+  {
+    Stmt gm(db_,
+            "SELECT group_id, member_usr, ordinal FROM group_members "
+            "ORDER BY group_id, ordinal;");
+    while (gm.step()) {
+      model::GroupMember member;
+      member.group_id = gm.column_text(0);
+      member.member_usr = gm.column_text(1);
+      member.ordinal = static_cast<int>(gm.column_int64(2));
+      m.group_members.push_back(std::move(member));
     }
   }
 

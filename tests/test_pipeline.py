@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -10,9 +10,6 @@ from typer.testing import CliRunner
 from clangquill import _core, cli, pipeline
 from clangquill.config import Config
 from clangquill.pipeline import MANIFEST_NAME, build
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 requires_libclang = pytest.mark.skipif(
     not _core.have_libclang(),
@@ -33,10 +30,42 @@ int twice(int x);
 """
 
 
+M7_FIXTURE = Path(__file__).parent / "cpp" / "fixtures" / "m7.hpp"
+
+
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     (tmp_path / "demo.hpp").write_text(FIXTURE)
     return tmp_path
+
+
+@requires_libclang
+def test_build_renders_all_m7_kinds(tmp_path: Path) -> None:
+    (tmp_path / "m7.hpp").write_text(M7_FIXTURE.read_text())
+    result = build(Config(input=["m7.hpp"], output_dir="api"), base_dir=tmp_path)
+    assert "group_math" in result.pages
+
+    api = tmp_path / "api"
+    ns = (api / "m7.md").read_text()
+    # Concept and class template render with their `template<...>` heads.
+    assert "{cpp:concept} template<typename T> m7::Addable" in ns
+    assert "{cpp:class} template<typename T, int N = 4> m7::Buffer" in ns
+    assert "{cpp:function} template <typename T> T m7::max_value" in ns
+    # Friends and operators.
+    assert "**Friends**" in ns
+    assert "{cpp:function} int m7::Vec::operator[]" in ns
+    # `\ingroup` bookkeeping never leaks into the rendered prose.
+    assert "\nmath\n" not in ns
+
+    # Macros become C-domain objects on their own pages, with attached docs.
+    macro = (api / "CQ_MAX.md").read_text()
+    assert "{c:macro} CQ_MAX(a, b)" in macro
+    assert "function-like macro" in macro
+
+    # The group page lists its `\ingroup` members.
+    grp = (api / "group_math.md").read_text()
+    assert grp.startswith("# Math utilities")
+    assert "{cpp:any}`m7::add`" in grp
 
 
 @requires_libclang
