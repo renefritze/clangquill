@@ -79,5 +79,5 @@ dev = [
 
 
 [project.urls]
-Documentation = "https://github.com/renefritze/clangquill"
+Documentation = "https://renefritze.github.io/clangquill/"
 Source = "https://github.com/renefritze/clangquill"
