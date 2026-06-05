@@ -48,7 +48,7 @@ jobs:
             chmod +x /opt/vcpkg-asset-fetch.sh &&
             cp {project}/tools/ci/fetch-libclang.sh /opt/fetch-libclang.sh &&
             chmod +x /opt/fetch-libclang.sh &&
-            LLVM_VERSION=20.1.8 /opt/fetch-libclang.sh /opt/libclang &&
+            LLVM_VERSION=22.1.0 /opt/fetch-libclang.sh /opt/libclang &&
             git clone https://github.com/microsoft/vcpkg /opt/vcpkg &&
             /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
            # cibuildwheel evaluates each CIBW_ENVIRONMENT value through
@@ -85,3 +85,34 @@ jobs:
         with:
           name: sdist
           path: ./dist/*.tar.gz
+  smoke_test:
+    name: Smoke-test wheel on ${{ matrix.arch }}
+    needs: build_wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+            image: quay.io/pypa/manylinux_2_34_x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+            image: quay.io/pypa/manylinux_2_34_aarch64
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: actions/download-artifact@v8
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist
+            # Install the wheel in a clean glibc-2.34 image that has no system
+            # LLVM and parse a header — proves the bundled libclang is
+            # self-contained (the build-time CIBW test runs with libclang still
+            # on LD_LIBRARY_PATH, which this deliberately does not).
+      - name: Install wheel and parse in ${{ matrix.image }}
+        run: >-
+          docker run --rm -v "$PWD:/work" -w /work ${{ matrix.image }}
+          bash -ec '
+          py=/opt/python/cp313-cp313/bin/python;
+          "$py" -m pip install dist/*.whl;
+          "$py" tools/ci/smoke_test.py'

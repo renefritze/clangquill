@@ -108,17 +108,16 @@ The libclang-enabled wheel build was implemented with one refinement to the
 source. The PyPI `libclang` wheel tops out at **18.1.1**, which would cap the
 shipped wheels at C++23. Meanwhile the **official `LLVM-<ver>-Linux-<arch>`
 release packages** (from LLVM 19/20 onward) changed to ship a libclang.so with
-**libLLVM statically linked in** — verified on `LLVM-20.1.8-Linux-X64`: its
-`libclang.so` (~207 MB) lists only `libc/libm/libz/ld-linux` as `NEEDED`, no
-shared `libLLVM.so`. That gives the *same* single-`.so`, no-libLLVM-payload
-vendoring benefit the ADR chose the PyPI wheel for, **and** a newer libclang
-that parses C++26.
+**libLLVM statically linked in** — there is no shared `libLLVM.so` dependency
+(its `NEEDED` is just libc/libstdc++/libgcc/libm/libz). That gives the *same*
+single-payload, no-monolithic-libLLVM vendoring benefit the ADR chose the PyPI
+wheel for, **and** a newer libclang that parses C++26.
 
 Realized decision: **bundle libclang from the official LLVM release tarball**
-(pinned `LLVM_VERSION`, currently **20.1.8**), fetched per-arch by
+(pinned `LLVM_VERSION`, currently **22.1.0**), fetched per-arch by
 `tools/ci/fetch-libclang.sh` (it also provides the `clang-c` headers and
 `LICENSE.TXT`, so no separate header vendoring is needed). `auditwheel repair`
-vendors the single self-contained `libclang.so`.
+vendors that libclang.so (plus libstdc++/libgcc).
 
 Consequences:
 
@@ -126,9 +125,12 @@ Consequences:
   **manylinux_2_34** image (`CIBW_MANYLINUX_*_IMAGE`). The wheels therefore
   install on glibc ≥ 2.34 systems; older systems build from source.
 * Wheel size is larger than the ~24 MB PyPI-wheel estimate (the self-contained
-  libclang.so is bigger), but still a single vendored `.so` — far smaller than
-  vendoring the monolithic shared `libLLVM`.
+  libclang.so is ~200 MB uncompressed), but still avoids the monolithic shared
+  `libLLVM`.
 * `CLANGQUILL_WITH_LIBCLANG=ON` is set in the wheel build so a missing libclang
-  fails loudly; `CIBW_TEST_COMMAND` asserts `have_libclang()`.
+  fails loudly; `CIBW_TEST_COMMAND` asserts `have_libclang()`, and a separate
+  `smoke_test` job installs the repaired wheel in a clean manylinux_2_34 image
+  (no system LLVM, no `LD_LIBRARY_PATH`) and parses a header to prove the
+  bundled libclang is self-sufficient.
 * The LLVM license ships in the wheel as `LICENSE-LLVM.txt` via
   `project.license-files` (the project's own license stays BSD-2-Clause).

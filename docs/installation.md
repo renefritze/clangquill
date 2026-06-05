@@ -20,7 +20,7 @@ If you don't have [pip][pip] installed, this [Python installation guide][python 
 you through the process.
 
 ```{note}
-**Bundled libclang.** The Linux wheels bundle a self-contained **libclang 20**
+**Bundled libclang.** The Linux wheels bundle a self-contained **libclang 22**
 (from the official LLVM release), so parsing works out of the box with no system
 LLVM required — `c++20`/`c++23`/`c++26` are all supported (see the
 [`std` configuration note](guides/configuration.md)). Because that libclang
