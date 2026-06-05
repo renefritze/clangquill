@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from clangquill import __version__
+from clangquill import __version__, _core
 from clangquill.config import CONFIG_FIELDS, Config
 from clangquill.pipeline import build
 
@@ -32,6 +32,14 @@ def _run(app: Sphinx) -> None:
     if not config.input:
         logger.info("clangquill: no clangquill_input configured; skipping generation")
         return
+    if not _core.have_libclang():
+        # Degrade gracefully where the core was built without libclang (e.g. a
+        # docs environment lacking the dev headers) rather than failing the
+        # whole Sphinx build. Still write a placeholder root document so any
+        # toctree pointing at the output keeps resolving.
+        logger.warning("clangquill: core built without libclang; skipping API generation")
+        _write_placeholder(app, config)
+        return
     result = build(config, base_dir=app.srcdir)
     # Remembered for the build-finished hook so a throwaway IR can be removed.
     app._clangquill_temp_db = result.db_path if result.db_is_temporary else None  # noqa: SLF001
@@ -43,6 +51,18 @@ def _run(app: Sphinx) -> None:
     )
     for diagnostic in result.diagnostics:
         logger.warning("clangquill: %s", diagnostic)
+
+
+def _write_placeholder(app: Sphinx, config: Config) -> None:
+    """Write a stub root document so a toctree referencing the output resolves."""
+    from pathlib import Path  # noqa: PLC0415
+
+    out = Path(app.srcdir) / config.output_dir
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"{config.root_document}.md").write_text(
+        "# API Reference\n\nAPI generation was skipped (libclang unavailable).\n",
+        encoding="utf-8",
+    )
 
 
 def _cleanup(app: Sphinx, exception: Exception | None) -> None:  # noqa: ARG001
@@ -61,8 +81,11 @@ def _cleanup(app: Sphinx, exception: Exception | None) -> None:  # noqa: ARG001
 
 def setup(app: Sphinx) -> dict[str, Any]:
     """Register config values and hooks; return extension metadata."""
-    # Generated pages are MyST, so the parser must be active to read them.
-    app.setup_extension("myst_parser")
+    # Generated pages are MyST, so a MyST parser must be active to read them.
+    # Pull in myst_parser only when no MyST parser is already configured —
+    # myst_nb supersedes it and registering both for ``.md`` raises a conflict.
+    if not ({"myst_parser", "myst_nb"} & set(app.extensions)):
+        app.setup_extension("myst_parser")
 
     for name, default in CONFIG_FIELDS:
         app.add_config_value(name, default, "env")

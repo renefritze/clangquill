@@ -7,6 +7,8 @@
 readme
 installation
 usage
+guides/index
+cpp_api_index
 contributing
 authors
 development/index

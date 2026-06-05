@@ -103,3 +103,37 @@ def test_minimal_sphinx_project_builds(tmp_path: Path) -> None:
     # geo.html resolved the {cpp:any} cross-reference to a generated object id.
     html = (out / "api" / "geo.html").read_text()
     assert "_CPPv4N3geo6CircleE" in html
+
+
+def test_coexists_with_a_preconfigured_myst_parser(tmp_path: Path) -> None:
+    """A pre-configured MyST parser must not be double-registered.
+
+    Listing ``myst_parser`` (or ``myst_nb``) alongside the extension previously
+    raised ``source_suffix '.md' is already registered``.
+    """
+    pytest.importorskip("sphinx")
+    pytest.importorskip("myst_parser")
+    from sphinx.application import Sphinx  # noqa: PLC0415
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "geo.hpp").write_text(HEADER)
+    # myst_parser listed explicitly, before the clangquill extension.
+    (src / "conf.py").write_text(
+        'extensions = ["myst_parser", "clangquill.sphinx_ext"]\n'
+        'master_doc = "index"\nclangquill_input = ["geo.hpp"]\nclangquill_output_dir = "api"\n',
+    )
+    (src / "index.md").write_text(ROOT_INDEX)
+
+    app = Sphinx(
+        str(src),
+        str(src),
+        str(tmp_path / "out"),
+        str(tmp_path / "doctree"),
+        "html",
+        warningiserror=True,
+        status=None,
+        warning=(tmp_path / "warnings.txt").open("w", encoding="utf-8"),
+    )
+    app.build()
+    assert (src / "api" / "geo.md").is_file()
