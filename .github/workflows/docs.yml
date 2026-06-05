@@ -38,7 +38,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       - name: Build docs
               # Build the core with libclang so the dogfood C++ API is generated.
         env:
@@ -47,7 +47,7 @@ jobs:
           uv sync --frozen --extra docs
           uv run make -C docs html
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: docs/_build/html
   deploy:
@@ -60,4 +60,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
