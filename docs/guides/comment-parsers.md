@@ -55,8 +55,8 @@ $ clangquill build include/geo.hpp --comment-parser my_pkg.parsers:rst_parser
 ```
 
 ```python
-# Python
-Generator(store, comment_parser="rst").generate("docs/api")
+# Python (a dotted path, or a name you registered — see below)
+Generator(store, comment_parser="my_pkg.parsers:rst_parser").generate("docs/api")
 ```
 
 ## Example: register a custom parser

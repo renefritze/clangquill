@@ -84,7 +84,10 @@ def setup(app: Sphinx) -> dict[str, Any]:
     # Generated pages are MyST, so a MyST parser must be active to read them.
     # Pull in myst_parser only when no MyST parser is already configured —
     # myst_nb supersedes it and registering both for ``.md`` raises a conflict.
-    if not ({"myst_parser", "myst_nb"} & set(app.extensions)):
+    # Inspect both already-loaded extensions and the full configured list, so the
+    # result does not depend on where the extension sits in conf.py's order.
+    configured = set(app.extensions) | set(app.config.extensions)
+    if not ({"myst_parser", "myst_nb"} & configured):
         app.setup_extension("myst_parser")
 
     for name, default in CONFIG_FIELDS:
