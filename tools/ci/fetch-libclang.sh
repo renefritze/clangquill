@@ -16,6 +16,11 @@ set -euo pipefail
 ver="${LLVM_VERSION:-20.1.8}"
 prefix="${1:-/opt/libclang}"
 
+if [ "$(uname -s)" != "Linux" ]; then
+  echo "fetch-libclang: this script only supports Linux" >&2
+  exit 1
+fi
+
 case "$(uname -m)" in
   x86_64 | amd64) arch="X64" ;;
   aarch64 | arm64) arch="ARM64" ;;
@@ -40,7 +45,9 @@ curl -fsSL --retry 3 --retry-delay 2 "$url" \
 # names plus that symlink, but recreate it defensively if it is missing.
 if [ ! -e "${prefix}/lib/libclang.so" ]; then
   real="$(find "${prefix}/lib" -maxdepth 1 -name 'libclang.so.*' -type f | head -1 || true)"
-  [ -n "$real" ] && ln -sf "$(basename "$real")" "${prefix}/lib/libclang.so"
+  if [ -n "$real" ]; then
+    ln -sf "$(basename "$real")" "${prefix}/lib/libclang.so"
+  fi
 fi
 
 # Fail loudly here rather than letting CMake silently fall back to the stub.
