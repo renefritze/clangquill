@@ -41,9 +41,9 @@ api/index
 def _make_project(tmp_path: Path, cache: Path) -> Path:
     src = tmp_path / "src"
     src.mkdir()
-    (src / "m7.hpp").write_text(FIXTURE.read_text())
-    (src / "conf.py").write_text(CONF.format(cache=str(cache)))
-    (src / "index.md").write_text(ROOT_INDEX)
+    (src / "m7.hpp").write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+    (src / "conf.py").write_text(CONF.format(cache=str(cache)), encoding="utf-8")
+    (src / "index.md").write_text(ROOT_INDEX, encoding="utf-8")
     return src
 
 
@@ -51,17 +51,18 @@ def _build(src: Path, build_root: Path) -> None:
     from sphinx.application import Sphinx  # noqa: PLC0415
 
     build_root.mkdir(parents=True, exist_ok=True)
-    app = Sphinx(
-        str(src),
-        str(src),
-        str(build_root / "out"),
-        str(build_root / "doctree"),
-        "html",
-        warningiserror=True,  # any unresolved xref or bad directive fails the build
-        status=None,
-        warning=(build_root / "warnings.txt").open("w"),
-    )
-    app.build()
+    with (build_root / "warnings.txt").open("w", encoding="utf-8") as warning_file:
+        app = Sphinx(
+            str(src),
+            str(src),
+            str(build_root / "out"),
+            str(build_root / "doctree"),
+            "html",
+            warningiserror=True,  # any unresolved xref or bad directive fails the build
+            status=None,
+            warning=warning_file,
+        )
+        app.build()
 
 
 def test_full_sphinx_build_over_fixtures(tmp_path: Path) -> None:
@@ -77,12 +78,12 @@ def test_full_sphinx_build_over_fixtures(tmp_path: Path) -> None:
     # 1. The extension generated MyST pages for every partition.
     api = src / "api"
     assert (api / "index.md").is_file()
-    namespace_page = (api / "m7.md").read_text()
+    namespace_page = (api / "m7.md").read_text(encoding="utf-8")
     assert "{cpp:concept} template<typename T> m7::Addable" in namespace_page
     assert "{cpp:class} template<typename T, int N = 4> m7::Buffer" in namespace_page
     assert "**Friends**" in namespace_page
-    assert "{c:macro} CQ_MAX(a, b)" in (api / "CQ_MAX.md").read_text()
-    assert (api / "group_math.md").read_text().startswith("# Math utilities")
+    assert "{c:macro} CQ_MAX(a, b)" in (api / "CQ_MAX.md").read_text(encoding="utf-8")
+    assert (api / "group_math.md").read_text(encoding="utf-8").startswith("# Math utilities")
 
     # 2. objects.inv lists the generated domain objects across cpp: and c:.
     with (out / "out" / "objects.inv").open("rb") as handle:
@@ -94,7 +95,7 @@ def test_full_sphinx_build_over_fixtures(tmp_path: Path) -> None:
     # 3. Cross-references resolved: the group page links to its member objects,
     #    which live on the namespace page (an unresolved {cpp:any} would have
     #    failed the warningiserror build above).
-    group_html = (out / "out" / "api" / "group_math.html").read_text()
+    group_html = (out / "out" / "api" / "group_math.html").read_text(encoding="utf-8")
     assert "m7.html#" in group_html
 
 
