@@ -110,7 +110,14 @@ bool raw_has_group_command(const std::string& raw) {
     if (raw[i] != '\\' && raw[i] != '@') continue;
     for (const char* cmd : kCmds) {
       std::string c(cmd);
-      if (raw.compare(i + 1, c.size(), c) == 0) return true;
+      if (raw.compare(i + 1, c.size(), c) != 0) continue;
+      // Require a word boundary so `\defgrouping` / `\ingroup_x` do not match.
+      std::size_t next = i + 1 + c.size();
+      if (next >= raw.size() ||
+          (std::isalnum(static_cast<unsigned char>(raw[next])) == 0 &&
+           raw[next] != '_')) {
+        return true;
+      }
     }
   }
   return false;

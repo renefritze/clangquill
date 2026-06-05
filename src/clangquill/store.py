@@ -350,6 +350,19 @@ class Store:
         ).fetchall()
         return [row["member_usr"] for row in rows]
 
+    def group_symbols(self, group_id: str) -> list[Symbol]:
+        """Return the member symbols of ``group_id`` in declaration order.
+
+        A single JOIN avoids an N+1 lookup per member; members whose USR no
+        longer resolves to a symbol are naturally dropped by the join.
+        """
+        sql = (
+            f"SELECT {self._SYMBOL_COLUMNS} FROM symbols s "  # noqa: S608
+            "JOIN group_members m ON s.usr = m.member_usr "
+            "WHERE m.group_id = ? ORDER BY m.ordinal"
+        )
+        return [self._to_symbol(row) for row in self._con.execute(sql, (group_id,))]
+
     def files(self) -> list[SourceFile]:
         """Return all parsed source files ordered by path."""
         rows = self._con.execute(

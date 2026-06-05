@@ -423,15 +423,21 @@ void register_symbol_groups(VisitCtx& ctx, const std::string& usr,
   model::CommentModel cm = DoxygenCommentParser::parse_raw_text(raw);
   auto it = cm.custom.find("ingroup");
   if (it == cm.custom.end()) return;
+  // `\ingroup` accepts several space-separated group ids; register each.
   for (const std::string& v : it->second) {
-    std::string id = first_token(v);
-    if (id.empty()) continue;
-    ensure_group(ctx, id);
-    model::GroupMember member;
-    member.group_id = id;
-    member.member_usr = usr;
-    member.ordinal = static_cast<int>(ctx.mod->group_members.size());
-    ctx.mod->group_members.push_back(std::move(member));
+    std::size_t start = v.find_first_not_of(" \t\r\n");
+    while (start != std::string::npos) {
+      std::size_t end = v.find_first_of(" \t\r\n", start);
+      std::string id =
+          v.substr(start, end == std::string::npos ? end : end - start);
+      ensure_group(ctx, id);
+      model::GroupMember member;
+      member.group_id = id;
+      member.member_usr = usr;
+      member.ordinal = static_cast<int>(ctx.mod->group_members.size());
+      ctx.mod->group_members.push_back(std::move(member));
+      start = v.find_first_not_of(" \t\r\n", end);
+    }
   }
 }
 
@@ -453,11 +459,15 @@ void scan_group_definitions(const std::string& raw, VisitCtx& ctx) {
       ++m;
     }
     s = s.substr(m);
+    // Trim trailing whitespace first so a trailing `*/` is stripped even when
+    // followed by spaces or a carriage return (e.g. ` * text */ `).
+    std::size_t b = s.find_last_not_of(" \t\r");
+    if (b != std::string::npos) s = s.substr(0, b + 1);
     if (s.size() >= 2 && s.compare(s.size() - 2, 2, "*/") == 0) {
       s.erase(s.size() - 2);
     }
     a = s.find_first_not_of(" \t\r");
-    std::size_t b = s.find_last_not_of(" \t\r");
+    b = s.find_last_not_of(" \t\r");
     return a == std::string::npos ? std::string{} : s.substr(a, b - a + 1);
   };
 

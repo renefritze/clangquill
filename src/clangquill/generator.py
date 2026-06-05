@@ -248,8 +248,7 @@ class Generator:
 
     def group_symbols(self, group: Group) -> list[Symbol]:
         """Return the member symbols of ``group`` (skipping any now absent)."""
-        members = [self.store.symbol(usr) for usr in self.store.group_members(group.id)]
-        return [s for s in members if s is not None]
+        return self.store.group_symbols(group.id)
 
     def subgroups(self, group: Group) -> list[Group]:
         """Return the groups nested directly under ``group``."""
