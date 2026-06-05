@@ -3,28 +3,28 @@
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
   - repo: https://github.com/lyz-code/yamlfix/
-    rev: 1.16.0
+    rev: 1.19.1
     hooks:
       - id: yamlfix
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.0
+    rev: v0.15.16
     hooks:
-      - id: ruff
+      - id: ruff-check
       - id: ruff-format
 # The markdown-link-check can't access internal or private repos, see
 # .markdown_link_check_config.json on how to exclude such repos.
   - repo: https://github.com/tcort/markdown-link-check
-    rev: v3.11.2
+    rev: v3.14.2
     hooks:
       - id: markdown-link-check
         args: [--quiet, --config=.markdown_link_check_config.json]
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.6.26
+    rev: v1.7.12
     hooks:
       - id: actionlint
 # this should go last since it will fix line endings broken by other tools
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
+    rev: v5.0.0
     hooks:
       - id: trailing-whitespace
     # The pre-commit check on CI detects some whitespace changes if we include .github

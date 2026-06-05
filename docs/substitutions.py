@@ -39,7 +39,7 @@ inline_directives = [
 if __name__ == "__main__":
     import pprint as pp
 
-    # 
+    #
     with open("rst_to_myst.sed", "wt") as out:
         for dr in inline_directives:
             out.write(f"s;:{dr}:;{{{dr}}};g\n")

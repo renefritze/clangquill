@@ -1,4 +1,15 @@
 {
     "__comment__": "https://github.com/tcort/markdown-link-check#config-file-format",
-    "ignorePatterns": []
+    "__comment_settings__": "GitHub repository settings pages are only reachable when authenticated, so they 404 for the link checker.",
+    "ignorePatterns": [
+        {
+            "pattern": "^https://github\\.com/renefritze/clangquill/settings"
+        }
+    ],
+    "__comment_403__": "Several documentation hosts (readthedocs, pypi, jinja, codecov, ...) reject automated requests with 403; treat those as alive.",
+    "aliveStatusCodes": [
+        200,
+        206,
+        403
+    ]
 }
