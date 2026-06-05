@@ -1,70 +1,63 @@
 ---
 # Build the Sphinx docs (with libclang so the C++ dogfood section is generated)
 # and publish them to GitHub Pages on every push to main.
-
 name: docs
-
 on:
-    push:
-        branches:
-            - main
-    workflow_dispatch:
-
+  push:
+    branches: [main]
+  workflow_dispatch:
 # Allow the deploy job to publish to Pages via OIDC.
 permissions:
-    contents: read
-    pages: write
-    id-token: write
-
+  contents: read
+  pages: write
+  id-token: write
 # One in-flight Pages deployment at a time; let a running deploy finish.
 concurrency:
-    group: pages
-    cancel-in-progress: false
-
+  group: pages
+  cancel-in-progress: false
 jobs:
-    build:
-        name: Build docs
-        runs-on: ubuntu-24.04
-        steps:
-            - uses: actions/checkout@v6.0.2
-              with:
+  build:
+    name: Build docs
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
                   # full history so setuptools_scm derives the version
-                  fetch-depth: 0
-            - name: Install build dependencies
+          fetch-depth: 0
+      - name: Install build dependencies
               # libclang lets the build dogfood clangquill on its own C++ headers;
               # sqlite/nlohmann are the core's build dependencies.
-              run: |
-                  sudo apt-get update
-                  sudo apt-get install -y --no-install-recommends \
-                    libclang-dev libsqlite3-dev nlohmann-json3-dev
-            - name: Install uv
-              uses: astral-sh/setup-uv@v8.1.0
-            - name: Set up Python
-              uses: actions/setup-python@v6
-              with:
-                  python-version: '3.13'
-            - name: Configure Pages
-              uses: actions/configure-pages@v5
-            - name: Build docs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libclang-dev libsqlite3-dev nlohmann-json3-dev
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+      - name: Build docs
               # Build the core with libclang so the dogfood C++ API is generated.
-              env:
-                  SKBUILD_CMAKE_DEFINE: CLANGQUILL_WITH_LIBCLANG=ON
-              run: |
-                  uv sync --frozen --extra docs
-                  uv run make -C docs html
-            - name: Upload Pages artifact
-              uses: actions/upload-pages-artifact@v3
-              with:
-                  path: docs/_build/html
-
-    deploy:
-        name: Deploy to GitHub Pages
-        needs: build
-        runs-on: ubuntu-latest
-        environment:
-            name: github-pages
-            url: ${{ steps.deployment.outputs.page_url }}
-        steps:
-            - name: Deploy to GitHub Pages
-              id: deployment
-              uses: actions/deploy-pages@v4
+        env:
+          SKBUILD_CMAKE_DEFINE: CLANGQUILL_WITH_LIBCLANG=ON
+        run: |
+          uv sync --frozen --extra docs
+          uv run make -C docs html
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/_build/html
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

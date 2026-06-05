@@ -1,86 +1,80 @@
 ---
 name: wheels
-
 on:
-    push:
-        branches:
-            - main
-        tags:
-            - v*
-    pull_request:
-    workflow_dispatch:
-
+  push:
+    branches: [main]
+    tags: [v*]
+  pull_request:
+  workflow_dispatch:
 jobs:
-    build_wheels:
-        name: Wheels on linux/${{ matrix.arch }}
-        runs-on: ${{ matrix.os }}
-        strategy:
-            fail-fast: false
-            matrix:
+  build_wheels:
+    name: Wheels on linux/${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
                 # Build each Linux arch on its own native runner (arm64 runners
                 # are free for public repos) — far faster than QEMU emulation.
-                include:
-                    - os: ubuntu-latest
-                      arch: x86_64
-                    - os: ubuntu-24.04-arm
-                      arch: aarch64
-        steps:
-            - uses: actions/checkout@v6.0.2
-              with:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
                   # full history so setuptools_scm derives the version
-                  fetch-depth: 0
-
-            - name: Build manylinux wheels
-              uses: pypa/cibuildwheel@v3.4
-              env:
+          fetch-depth: 0
+      - name: Build manylinux wheels
+        uses: pypa/cibuildwheel@v3.4
+        env:
                   # The core links sqlite3 + nlohmann-json, sourced via vcpkg
                   # inside the manylinux image (apt is unavailable there). vcpkg
                   # is bootstrapped once per container in CIBW_BEFORE_ALL.
                   # libclang stays optional here (stub backend); bundling a
                   # self-contained libclang per ADR 0001 is a follow-up.
-                  CIBW_BUILD: cp313-*
-                  CIBW_SKIP: '*-musllinux*'
-                  CIBW_ARCHS_LINUX: ${{ matrix.arch }}
-                  CIBW_BUILD_VERBOSITY: '1'
+          CIBW_BUILD: cp313-*
+          CIBW_SKIP: '*-musllinux*'
+          CIBW_ARCHS_LINUX: ${{ matrix.arch }}
+          CIBW_BUILD_VERBOSITY: '1'
                   # manylinux_2_28 ships unzip/tar/curl but not zip, which
                   # vcpkg's bootstrap requires; install it (a vcpkg build
                   # prerequisite, not a C++ dependency) before bootstrapping.
-                  CIBW_BEFORE_ALL_LINUX: >-
-                      dnf -y install zip unzip tar curl &&
-                      cp {project}/tools/ci/vcpkg-asset-fetch.sh /opt/vcpkg-asset-fetch.sh &&
-                      chmod +x /opt/vcpkg-asset-fetch.sh &&
-                      git clone https://github.com/microsoft/vcpkg /opt/vcpkg &&
-                      /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
-                  # cibuildwheel evaluates each CIBW_ENVIRONMENT value through
+          CIBW_BEFORE_ALL_LINUX: >-
+            dnf -y install zip unzip tar curl &&
+            cp {project}/tools/ci/vcpkg-asset-fetch.sh /opt/vcpkg-asset-fetch.sh &&
+            chmod +x /opt/vcpkg-asset-fetch.sh &&
+            git clone https://github.com/microsoft/vcpkg /opt/vcpkg &&
+            /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+           # cibuildwheel evaluates each CIBW_ENVIRONMENT value through
                   # bashlex, which rejects a bare `NAME=value` (it parses as a
                   # shell assignment), so the toolchain define must be quoted.
                   # sqlite.org also 403s vcpkg's default downloader, so distfiles
                   # go through a browser-User-Agent script (SHA512 still checked).
-                  CIBW_ENVIRONMENT_LINUX: >-
-                      VCPKG_ROOT=/opt/vcpkg
-                      SKBUILD_CMAKE_DEFINE="CMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake"
-                      X_VCPKG_ASSET_SOURCES="clear;x-script,/opt/vcpkg-asset-fetch.sh {url} {sha512} {dst}"
-                  CIBW_TEST_COMMAND: >-
-                      python -c "from clangquill import _core;
-                      print(_core.__core_version__, _core.have_libclang())"
-
-            - uses: actions/upload-artifact@v7
-              with:
-                  name: wheels-${{ matrix.os }}
-                  path: ./wheelhouse/*.whl
-
-    build_sdist:
-        name: Source distribution
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v6.0.2
-              with:
-                  fetch-depth: 0
-            - name: Install uv
-              uses: astral-sh/setup-uv@v8.1.0
-            - name: Build sdist
-              run: uv build --sdist
-            - uses: actions/upload-artifact@v7
-              with:
-                  name: sdist
-                  path: ./dist/*.tar.gz
+          CIBW_ENVIRONMENT_LINUX: >-
+            VCPKG_ROOT=/opt/vcpkg
+            SKBUILD_CMAKE_DEFINE="CMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake"
+            X_VCPKG_ASSET_SOURCES="clear;x-script,/opt/vcpkg-asset-fetch.sh {url}
+            {sha512} {dst}"
+          CIBW_TEST_COMMAND: >-
+            python -c "from clangquill import _core;
+            print(_core.__core_version__, _core.have_libclang())"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+  build_sdist:
+    name: Source distribution
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+      - name: Build sdist
+        run: uv build --sdist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sdist
+          path: ./dist/*.tar.gz
