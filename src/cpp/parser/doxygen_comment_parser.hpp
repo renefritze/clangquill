@@ -17,8 +17,8 @@ namespace clangquill::parser {
 /// @brief Default comment parser, understanding Doxygen syntax.
 ///
 /// Walks libclang's parsed CXComment tree for structure (brief, paragraphs,
-/// `@param`/`@tparam`, block commands) and supplements it with raw-text command
-/// scanning for arguments libclang does not split out (`@retval` / `@throws`
+/// `\@param`/`\@tparam`, block commands) and supplements it with raw-text command
+/// scanning for arguments libclang does not split out (`\@retval` / `\@throws`
 /// value names). The two passes are merged into a single format-agnostic
 /// CommentModel.
 class DoxygenCommentParser : public ICommentParser {
