@@ -15,18 +15,23 @@ import os
 import re
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 RELEASES_URL = "https://api.github.com/repos/llvm/llvm-project/releases?per_page=40"
-FETCH_SCRIPT = os.path.join(os.path.dirname(__file__), "fetch-libclang.sh")
+FETCH_SCRIPT = Path(__file__).parent / "fetch-libclang.sh"
 _STABLE_TAG = re.compile(r"^llvmorg-(\d+)\.(\d+)\.(\d+)$")
 
 
 def pinned_version() -> str:
-    with open(FETCH_SCRIPT, encoding="utf-8") as fh:
-        text = fh.read()
+    try:
+        text = FETCH_SCRIPT.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        msg = f"could not find fetch-libclang.sh at {FETCH_SCRIPT}"
+        raise SystemExit(msg) from None
     match = re.search(r"LLVM_VERSION:-([0-9]+\.[0-9]+\.[0-9]+)", text)
     if not match:
-        raise SystemExit("could not find pinned LLVM_VERSION in fetch-libclang.sh")
+        msg = "could not find pinned LLVM_VERSION in fetch-libclang.sh"
+        raise SystemExit(msg)
     return match.group(1)
 
 
@@ -44,11 +49,14 @@ def latest_with_both_arches(releases: list[dict]) -> str | None:
     best: tuple[int, int, int] | None = None
     best_str: str | None = None
     for rel in releases:
-        match = _STABLE_TAG.match(rel.get("tag_name", ""))
+        if not isinstance(rel, dict):
+            continue
+        match = _STABLE_TAG.match(rel.get("tag_name") or "")
         if not match:
             continue
         ver = ".".join(match.groups())
-        assets = [a.get("name", "") for a in rel.get("assets", [])]
+        raw_assets = rel.get("assets") or []
+        assets = [a.get("name") or "" for a in raw_assets if isinstance(a, dict)]
         if not _has_both_linux_arches(assets, ver):
             continue
         candidate = _ver_tuple(ver)
@@ -78,6 +86,10 @@ def main() -> int:
         releases = fetch_releases()
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         print(f"::warning::could not query LLVM releases ({exc}); skipping pin check")
+        return 0
+
+    if not isinstance(releases, list):
+        print("::warning::unexpected response format from LLVM releases API; skipping")
         return 0
 
     latest = latest_with_both_arches(releases)
