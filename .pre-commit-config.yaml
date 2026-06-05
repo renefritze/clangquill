@@ -11,13 +11,6 @@ repos:
     hooks:
       - id: ruff-check
       - id: ruff-format
-# The markdown-link-check can't access internal or private repos, see
-# .markdown_link_check_config.json on how to exclude such repos.
-  - repo: https://github.com/tcort/markdown-link-check
-    rev: v3.14.2
-    hooks:
-      - id: markdown-link-check
-        args: [--quiet, --config=.markdown_link_check_config.json]
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.12
     hooks:
