@@ -1,0 +1,23 @@
+---
+# Keep the bundled-libclang pin fresh: fail when a newer LLVM release ships both
+# Linux arch tarballs (the packages tools/ci/fetch-libclang.sh downloads). Runs
+# on a schedule so a red run is the signal to bump LLVM_VERSION; also dispatchable
+# on demand.
+name: libclang-pin-check
+on:
+  schedule:
+    - cron: 0 6 * * 1
+  workflow_dispatch:
+jobs:
+  check:
+    name: libclang pin freshness
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Check for a newer libclang with both Linux arches
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python tools/ci/check_libclang_pin.py
