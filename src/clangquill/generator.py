@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from clangquill.comments import CommentModel
-    from clangquill.store import Enumerator, Parameter, Reference, SourceFile, Store, Symbol
+    from clangquill.store import Enumerator, Group, Parameter, Reference, SourceFile, Store, Symbol
 
 # Per-kind Jinja template (the ``{kind}.md.jinja`` override seam). Several
 # SymbolKinds share a rendering, e.g. struct/union reuse the class template.
@@ -48,6 +48,8 @@ _TEMPLATE_FOR: dict[SymbolKind, str] = {
     SymbolKind.FIELD: "variable",
     SymbolKind.TYPEDEF: "typedef",
     SymbolKind.TYPE_ALIAS: "typedef",
+    SymbolKind.CONCEPT: "concept",
+    SymbolKind.MACRO: "macro",
 }
 
 # The C++ domain object directive emitted for each kind.
@@ -68,6 +70,8 @@ _DIRECTIVE_FOR: dict[SymbolKind, str] = {
     SymbolKind.FIELD: "cpp:member",
     SymbolKind.TYPEDEF: "cpp:type",
     SymbolKind.TYPE_ALIAS: "cpp:type",
+    SymbolKind.CONCEPT: "cpp:concept",
+    SymbolKind.MACRO: "c:macro",
 }
 
 # Human-readable label used in section headings.
@@ -87,6 +91,8 @@ _LABEL_FOR: dict[SymbolKind, str] = {
     SymbolKind.FIELD: "Field",
     SymbolKind.TYPEDEF: "Typedef",
     SymbolKind.TYPE_ALIAS: "Type alias",
+    SymbolKind.CONCEPT: "Concept",
+    SymbolKind.MACRO: "Macro",
 }
 
 _ACCESS_KEYWORD: dict[AccessKind, str] = {
@@ -236,6 +242,23 @@ class Generator:
         """Return the base-class references of ``symbol``."""
         return self.store.bases(symbol.usr)
 
+    def friends(self, symbol: Symbol) -> list[Reference]:
+        """Return the friend references of a record ``symbol``."""
+        return self.store.friends(symbol.usr)
+
+    def group_symbols(self, group: Group) -> list[Symbol]:
+        """Return the member symbols of ``group`` (skipping any now absent)."""
+        return self.store.group_symbols(group.id)
+
+    def subgroups(self, group: Group) -> list[Group]:
+        """Return the groups nested directly under ``group``."""
+        return self.store.subgroups(group.id)
+
+    @staticmethod
+    def group_stem(group: Group) -> str:
+        """Return the page stem used for ``group`` (matches :meth:`_render_group_pages`)."""
+        return _slug(f"group_{group.id}")
+
     def comment(self, symbol: Symbol) -> CommentModel | None:
         """Return the structured comment for ``symbol``, or ``None``."""
         return self.store.comment(symbol.usr, parser=self.comment_parser)
@@ -274,7 +297,7 @@ class Generator:
             parts.append(f"{keyword} {spelling}" if keyword else spelling)
         return " : " + ", ".join(parts)
 
-    def signature(self, symbol: Symbol) -> str:
+    def signature(self, symbol: Symbol) -> str:  # noqa: PLR0911
         """Return the directive argument (the text after ``{cpp:...}``).
 
         The argument carries the *qualified* name so the C++ domain attaches an
@@ -290,8 +313,20 @@ class Generator:
         if symbol.kind in (SymbolKind.TYPEDEF, SymbolKind.TYPE_ALIAS):
             target = self._underlying(symbol)
             return f"{symbol.qualified_name} = {target}" if target else symbol.qualified_name
+        if symbol.kind == SymbolKind.MACRO:
+            # ``signature`` is the function-like macro's ``NAME(a, b)`` (or the
+            # bare name for an object-like macro).
+            return symbol.signature or symbol.spelling
+        if symbol.kind == SymbolKind.CONCEPT:
+            # ``signature`` holds the ``template<...>`` head; the cpp:concept
+            # directive wants ``template<...> Name`` (no ``= constraint``).
+            head = f"{symbol.signature} " if symbol.signature else ""
+            return head + symbol.qualified_name
         if symbol.kind in (SymbolKind.CLASS, SymbolKind.STRUCT, SymbolKind.UNION, SymbolKind.CLASS_TEMPLATE):
-            return symbol.qualified_name + self.base_clause(symbol)
+            # For a class template ``signature`` is the leading ``template<...>``
+            # head; prepend it so the directive indexes a template object.
+            head = f"{symbol.signature} " if symbol.signature else ""
+            return head + symbol.qualified_name + self.base_clause(symbol)
         return symbol.qualified_name
 
     def _qualify(self, signature: str, symbol: Symbol) -> str:
@@ -327,11 +362,13 @@ class Generator:
             return f"{{cpp:{role}}}`{name}`" if name else ""
         to_usr = getattr(target, "to_usr", None)
         if to_usr is not None:  # a Reference
-            if not target.is_resolved and not to_usr:
-                return f"`{target.to_spelling}`" if target.to_spelling else ""
             resolved = self.store.symbol(to_usr) if to_usr else None
-            name = resolved.qualified_name if resolved is not None else target.to_spelling
-            return f"{{cpp:{role}}}`{name}`" if name else ""
+            if resolved is not None:
+                return f"{{cpp:{role}}}`{resolved.qualified_name}`"
+            # No documented target to point at (a builtin, an out-of-TU type, or
+            # a befriended entity declared elsewhere): degrade to inline code so
+            # the output carries no dangling cross-reference.
+            return f"`{target.to_spelling}`" if target.to_spelling else ""
         name = target.qualified_name or target.spelling
         return f"{{cpp:{role}}}`{name}`" if name else ""
 
@@ -369,15 +406,24 @@ class Generator:
         symbols = [s for s in self.roots() if s.file_id == source_file.id]
         return _normalize(template.render(file=source_file, symbols=symbols, level=level))
 
+    def render_group(self, group: Group, *, level: int = 1) -> str:
+        """Render a single documentation group page (members + subgroups)."""
+        template = self.env.get_template("group.md.jinja")
+        return _normalize(template.render(group=group, level=level))
+
     def render_pages(self, *, group_by: str = "symbol") -> list[RenderedPage]:
-        """Render every page in memory without writing, in toctree order.
+        r"""Render every page in memory without writing, in toctree order.
 
         ``group_by`` selects the page partitioning: ``"symbol"`` yields one page
-        per top-level symbol, ``"file"`` one page per parsed source file. The
-        caller decides how (and whether) to persist each :class:`RenderedPage`,
-        which is what lets the incremental pipeline skip unchanged outputs.
+        per top-level symbol, ``"file"`` one page per parsed source file. Pages
+        for any Doxygen ``\defgroup`` groups are appended after the symbol/file
+        pages; when there are no groups nothing is appended, so output for
+        group-free projects is unchanged. The caller decides how (and whether)
+        to persist each :class:`RenderedPage`, which is what lets the
+        incremental pipeline skip unchanged outputs.
         """
-        return self._render_file_pages() if group_by == "file" else self._render_symbol_pages()
+        pages = self._render_file_pages() if group_by == "file" else self._render_symbol_pages()
+        return pages + self._render_group_pages()
 
     def render_index(
         self,
@@ -440,6 +486,26 @@ class Generator:
             name = Path(source_file.path).name
             stem = self._unique_stem(_slug(name), seen)
             pages.append(RenderedPage(stem, name, self.render_file(source_file, level=1)))
+        return pages
+
+    def _render_group_pages(self) -> list[RenderedPage]:
+        """Render one page per documentation group, top-level groups first.
+
+        Returns an empty list when the IR defines no groups, leaving output for
+        group-free projects byte-identical to before.
+        """
+        groups = self.store.groups()
+        if not groups:
+            return []
+        pages: list[RenderedPage] = []
+        seen: set[str] = set()
+        # Top-level groups first, then nested ones, for a stable toctree order.
+        ordered = self.store.root_groups()
+        ordered_ids = {g.id for g in ordered}
+        ordered += [g for g in groups if g.id not in ordered_ids]
+        for group in ordered:
+            stem = self._unique_stem(_slug(f"group_{group.id}"), seen)
+            pages.append(RenderedPage(stem, group.title or group.id, self.render_group(group, level=1)))
         return pages
 
     @staticmethod

@@ -3,7 +3,7 @@
 namespace clangquill::store {
 
 // Bump when the DDL below changes in a backward-incompatible way.
-inline constexpr int kSchemaVersion = 1;
+inline constexpr int kSchemaVersion = 2;
 
 // Full schema for the intermediate SQLite artifact. The `references` table is
 // named with a trailing underscore to avoid the SQL reserved word, and
@@ -111,6 +111,22 @@ CREATE TABLE IF NOT EXISTS outputs (
   output_path  TEXT NOT NULL,
   content_hash TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS groups (
+  id              TEXT PRIMARY KEY,
+  title           TEXT NOT NULL DEFAULT '',
+  brief           TEXT NOT NULL DEFAULT '',
+  detail          TEXT NOT NULL DEFAULT '',
+  parent_group_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS group_members (
+  id         INTEGER PRIMARY KEY,
+  group_id   TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  member_usr TEXT,
+  ordinal    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id);
 )SQL";
 
 }  // namespace clangquill::store

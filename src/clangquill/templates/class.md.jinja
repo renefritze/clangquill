@@ -7,6 +7,11 @@
 **Inherits from** {% for base in bases %}{{ xref(base) }}{{ ", " if not loop.last }}{% endfor %}.
 
 {% endif %}
+{% set friends = gen.friends(symbol) %}
+{% if friends %}
+**Friends** {% for friend in friends %}{{ xref(friend) }}{{ ", " if not loop.last }}{% endfor %}.
+
+{% endif %}
 ```{{ "{" ~ gen.directive(symbol) ~ "}" }} {{ sig.directive_argument(symbol) }}
 
 {{ render_comment(comment) }}

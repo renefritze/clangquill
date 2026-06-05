@@ -15,6 +15,7 @@ enum class RefKind {
   VariableType,
   UnderlyingType,   // typedef / alias target
   EnumIntegerType,
+  Friend,           // record -> befriended function/class
 };
 
 // A directed edge in the cross-reference graph. `to_usr` may be empty when the

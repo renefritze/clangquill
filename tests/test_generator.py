@@ -169,6 +169,59 @@ def test_root_document_renames_index(gen: Generator, tmp_path: Path) -> None:
     assert not (out / "index.md").exists()
 
 
+@pytest.fixture
+def m7_store(m7_db: Path) -> Iterator[Store]:
+    with Store.open(m7_db) as opened:
+        yield opened
+
+
+@pytest.fixture
+def m7_gen(m7_store: Store) -> Generator:
+    return Generator(m7_store)
+
+
+def test_class_template_signature_carries_head(m7_gen: Generator, m7_store: Store) -> None:
+    sig = m7_gen.signature(_symbol(m7_store, "nn::Box"))
+    assert sig == "template<typename T, int N = 4> nn::Box"
+
+
+def test_concept_signature_carries_head(m7_gen: Generator, m7_store: Store) -> None:
+    assert m7_gen.signature(_symbol(m7_store, "nn::Addable")) == "template<typename T> nn::Addable"
+
+
+def test_macro_signature_is_name_or_call(m7_gen: Generator, m7_store: Store) -> None:
+    assert m7_gen.signature(_symbol(m7_store, "PI")) == "PI"
+    assert m7_gen.signature(_symbol(m7_store, "MAXM")) == "MAXM(a, b)"
+
+
+def test_concept_and_macro_emit_domain_directives(m7_gen: Generator, m7_store: Store) -> None:
+    assert "{cpp:concept} template<typename T> nn::Addable" in m7_gen.render_symbol(_symbol(m7_store, "nn::Addable"))
+    assert "{c:macro} MAXM(a, b)" in m7_gen.render_symbol(_symbol(m7_store, "MAXM"))
+
+
+def test_friends_block_links_documented_and_inlines_unknown(m7_gen: Generator, m7_store: Store) -> None:
+    rendered = m7_gen.render_symbol(_symbol(m7_store, "nn::Pt"))
+    assert "**Friends**" in rendered
+    # A documented friend links via the domain; an out-of-TU friend degrades to code.
+    assert "{cpp:any}`nn::helper`" in rendered
+    assert "`Outsider`" in rendered
+
+
+def test_group_pages_appended_and_render_members(m7_gen: Generator, tmp_path: Path) -> None:
+    pages = m7_gen.generate(tmp_path / "api")
+    assert "group_grp" in pages
+    page = (tmp_path / "api" / "group_grp.md").read_text()
+    assert page.startswith("# Grouped API")
+    assert "{cpp:any}`nn::Box`" in page
+    assert "{cpp:any}`nn::helper`" in page
+
+
+def test_no_group_pages_when_db_has_no_groups(gen: Generator, tmp_path: Path) -> None:
+    # The geo fixture defines no groups, so output is unchanged (no group pages).
+    pages = gen.generate(tmp_path / "api")
+    assert not any(stem.startswith("group_") for stem in pages)
+
+
 def test_rendered_myst_builds_as_cpp_domain_objects(gen: Generator, tmp_path: Path) -> None:
     sphinx = pytest.importorskip("sphinx")
     pytest.importorskip("myst_parser")
@@ -197,3 +250,28 @@ def test_rendered_myst_builds_as_cpp_domain_objects(gen: Generator, tmp_path: Pa
     assert "_CPPv4N3geo6CircleE" in html
     assert 'href="#_CPPv4N3geo6CircleE"' in html
     assert sphinx.__version__  # silence unused-import concerns
+
+
+def test_m7_kinds_build_as_domain_objects(m7_gen: Generator, tmp_path: Path) -> None:
+    pytest.importorskip("sphinx")
+    pytest.importorskip("myst_parser")
+    from sphinx.application import Sphinx  # noqa: PLC0415
+
+    src = tmp_path / "src"
+    m7_gen.generate(src)
+    (src / "conf.py").write_text('project = "m7"\nextensions = ["myst_parser"]\nmaster_doc = "index"\n')
+
+    warnings = tmp_path / "warnings.txt"
+    # warningiserror catches dangling cross-references, unknown directives, and
+    # malformed C++/C-domain signatures, so a clean build validates every kind.
+    app = Sphinx(
+        str(src),
+        str(src),
+        str(tmp_path / "out"),
+        str(tmp_path / "doctree"),
+        "html",
+        warningiserror=True,
+        status=None,
+        warning=warnings.open("w"),
+    )
+    app.build()

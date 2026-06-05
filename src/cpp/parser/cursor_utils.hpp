@@ -3,6 +3,7 @@
 #include <clang-c/Index.h>
 
 #include <string>
+#include <vector>
 
 #include "model/symbol.hpp"
 
@@ -49,6 +50,22 @@ std::string qualified_name(CXCursor c);
 
 // Pretty-printed declaration with terse output (no body); empty on failure.
 std::string pretty_signature(CXCursor c);
+
+// Reconstructs a macro's declaration text: "NAME" for object-like macros and
+// "NAME(a, b)" for function-like macros (recovered by tokenizing the extent,
+// since libclang exposes no macro-parameter API). Falls back to the spelling.
+std::string macro_signature(CXCursor c);
+
+// Builds the leading "template<...>" clause for a template/concept owner from
+// its declaration tokens (libclang exposes no default-argument API). Returns ""
+// when the owner has no template head. When `defaults_out` is non-null it is
+// filled with the per-parameter default text (text after a top-level '='), one
+// entry per template parameter in declaration order.
+std::string template_head(CXCursor owner, std::vector<std::string>* defaults_out);
+
+// Default-argument text of a function parameter cursor, recovered by scanning
+// its tokens for a top-level '='; "" when there is none.
+std::string param_default(CXCursor param);
 
 model::AccessKind map_access(CXCursor c);
 model::StorageKind map_storage(CXCursor c);

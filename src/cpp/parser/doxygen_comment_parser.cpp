@@ -43,6 +43,18 @@ std::pair<std::string, std::string> split_first_token(const std::string& s) {
   return {first, s.substr(i)};
 }
 
+std::string lower(std::string s) {
+  for (char& ch : s)
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  return s;
+}
+
+// Group commands carry cross-symbol bookkeeping (assembled separately from the
+// symbol's raw comment); they must never leak into the rendered prose.
+bool is_group_command(const std::string& name) {
+  return name == "ingroup" || name == "defgroup" || name == "addtogroup";
+}
+
 // Recursively gathers the text of a comment node (Text + inline commands).
 void collect_text(CXComment c, std::string& out) {
   CXCommentKind kind = clang_Comment_getKind(c);
@@ -52,6 +64,10 @@ void collect_text(CXComment c, std::string& out) {
     return;
   }
   if (kind == CXComment_InlineCommand) {
+    if (is_group_command(
+            lower(to_string(clang_InlineCommandComment_getCommandName(c))))) {
+      return;
+    }
     unsigned n = clang_InlineCommandComment_getNumArgs(c);
     if (n == 0) {
       out += to_string(clang_InlineCommandComment_getCommandName(c));
@@ -84,6 +100,29 @@ std::string text_of(CXComment c) {
   return normalize_ws(s);
 }
 
+// True when the raw comment uses a group command. libclang's parsed tree
+// mishandles these (it drops the command but leaves its argument as stray
+// prose), so such comments are parsed from the raw text instead, where group
+// commands route cleanly into `custom`.
+bool raw_has_group_command(const std::string& raw) {
+  static const char* const kCmds[] = {"ingroup", "defgroup", "addtogroup"};
+  for (std::size_t i = 0; i + 1 < raw.size(); ++i) {
+    if (raw[i] != '\\' && raw[i] != '@') continue;
+    for (const char* cmd : kCmds) {
+      std::string c(cmd);
+      if (raw.compare(i + 1, c.size(), c) != 0) continue;
+      // Require a word boundary so `\defgrouping` / `\ingroup_x` do not match.
+      std::size_t next = i + 1 + c.size();
+      if (next >= raw.size() ||
+          (std::isalnum(static_cast<unsigned char>(raw[next])) == 0 &&
+           raw[next] != '_')) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Combined argument + paragraph text of a block command. libclang declares
 // arguments for some commands (so the value lands in getArgText) and leaves
 // others entirely in the paragraph; concatenating both recovers the full text
@@ -97,11 +136,6 @@ std::string block_text(CXComment bc) {
   }
   collect_text(clang_BlockCommandComment_getParagraph(bc), s);
   return normalize_ws(s);
-}
-
-std::string lower(std::string s) {
-  for (char& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-  return s;
 }
 
 // Routes one command (lowercased name, normalized text) into the model. The
@@ -300,6 +334,8 @@ model::CommentModel parse_raw(const std::string& raw) {
 
 model::CommentModel DoxygenCommentParser::parse(CXCursor cursor,
                                                 const std::string& raw) const {
+  // Group commands confuse libclang's parsed tree; scan the raw text instead.
+  if (raw_has_group_command(raw)) return parse_raw(raw);
   CXComment full = clang_Cursor_getParsedComment(cursor);
   if (clang_Comment_getKind(full) == CXComment_FullComment &&
       clang_Comment_getNumChildren(full) > 0) {
@@ -308,6 +344,11 @@ model::CommentModel DoxygenCommentParser::parse(CXCursor cursor,
   }
   // Fallback: libclang did not surface a structured comment (e.g. a plain `//`
   // comment). Recover what we can by scanning the raw text for commands.
+  return parse_raw(raw);
+}
+
+model::CommentModel DoxygenCommentParser::parse_raw_text(
+    const std::string& raw) {
   return parse_raw(raw);
 }
 

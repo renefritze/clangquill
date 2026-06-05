@@ -23,6 +23,8 @@ enum class SymbolKind {
   TypeAlias,
   FunctionTemplate,
   ClassTemplate,
+  Concept,
+  Macro,
 };
 
 // C++ access specifier. None is used for namespace/file-scope entities.
