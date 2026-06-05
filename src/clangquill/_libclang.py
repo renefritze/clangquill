@@ -13,7 +13,9 @@ import re
 
 from clangquill import _core
 
-_VERSION_RE = re.compile(r"(\d+)\.\d+")
+# Anchor on the word "version" so we read the real version (e.g. "clang version
+# 18.1.3") rather than an incidental number elsewhere in the string.
+_VERSION_RE = re.compile(r"version\s+(\d+)\.")
 
 
 def libclang_major() -> int | None:
