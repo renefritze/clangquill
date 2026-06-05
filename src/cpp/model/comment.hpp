@@ -22,7 +22,7 @@ struct RawComment {
 
 /// @brief A normalized projection of a single structured comment field.
 ///
-/// For example a `@param` entry. Empty in M2; the table exists so the schema
+/// For example a `\@param` entry. Empty in M2; the table exists so the schema
 /// round-trips.
 struct CommentField {
   std::string symbol_usr;  ///< USR of the documented symbol.
