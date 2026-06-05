@@ -101,3 +101,34 @@ LLVM-exception**, which is permissive and compatible with clangquill's
 license. Action: ship the LLVM license file alongside `LICENSE` in the wheel
 metadata when libclang is bundled (to be added with the M2 libclang-enabled
 build).
+
+## Update (M2 implementation)
+
+The libclang-enabled wheel build was implemented with one refinement to the
+source. The PyPI `libclang` wheel tops out at **18.1.1**, which would cap the
+shipped wheels at C++23. Meanwhile the **official `LLVM-<ver>-Linux-<arch>`
+release packages** (from LLVM 19/20 onward) changed to ship a libclang.so with
+**libLLVM statically linked in** — verified on `LLVM-20.1.8-Linux-X64`: its
+`libclang.so` (~207 MB) lists only `libc/libm/libz/ld-linux` as `NEEDED`, no
+shared `libLLVM.so`. That gives the *same* single-`.so`, no-libLLVM-payload
+vendoring benefit the ADR chose the PyPI wheel for, **and** a newer libclang
+that parses C++26.
+
+Realized decision: **bundle libclang from the official LLVM release tarball**
+(pinned `LLVM_VERSION`, currently **20.1.8**), fetched per-arch by
+`tools/ci/fetch-libclang.sh` (it also provides the `clang-c` headers and
+`LICENSE.TXT`, so no separate header vendoring is needed). `auditwheel repair`
+vendors the single self-contained `libclang.so`.
+
+Consequences:
+
+* That libclang requires **GLIBC_2.34**, so the wheels are built in the
+  **manylinux_2_34** image (`CIBW_MANYLINUX_*_IMAGE`). The wheels therefore
+  install on glibc ≥ 2.34 systems; older systems build from source.
+* Wheel size is larger than the ~24 MB PyPI-wheel estimate (the self-contained
+  libclang.so is bigger), but still a single vendored `.so` — far smaller than
+  vendoring the monolithic shared `libLLVM`.
+* `CLANGQUILL_WITH_LIBCLANG=ON` is set in the wheel build so a missing libclang
+  fails loudly; `CIBW_TEST_COMMAND` asserts `have_libclang()`.
+* The LLVM license ships in the wheel as `LICENSE-LLVM.txt` via
+  `project.license-files` (the project's own license stays BSD-2-Clause).
