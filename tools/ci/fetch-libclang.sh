@@ -3,17 +3,17 @@
 # pieces clangquill needs into a prefix usable as CMake's LibClang_ROOT.
 #
 # Why the official "LLVM-<ver>-Linux-<arch>" package: from LLVM 19/20 onward it
-# ships a libclang.so with libLLVM *statically linked in* (NEEDED is only
-# libc/libm/libz/ld-linux — no shared libLLVM.so). So `auditwheel repair`
-# vendors a single self-contained .so rather than the ~129 MB monolithic
-# libLLVM the distro libclang drags in (see docs ADR-0001). The trade-off is a
-# GLIBC_2.34 floor, so the wheels must be built in a manylinux_2_34 image.
+# ships a libclang.so with libLLVM *statically linked in* (no shared libLLVM.so
+# — just libc/libstdc++/libgcc/libm/libz). So `auditwheel repair` vendors that
+# self-contained libclang (plus libstdc++/libgcc) rather than the ~129 MB
+# monolithic libLLVM the distro libclang drags in (see docs ADR-0001). The
+# trade-off is a GLIBC_2.34 floor, so wheels build in a manylinux_2_34 image.
 #
 # Usage:  fetch-libclang.sh [PREFIX]      (PREFIX defaults to /opt/libclang)
 # Env:    LLVM_VERSION                     (defaults to the pinned version below)
 set -euo pipefail
 
-ver="${LLVM_VERSION:-20.1.8}"
+ver="${LLVM_VERSION:-22.1.0}"
 prefix="${1:-/opt/libclang}"
 
 if [ "$(uname -s)" != "Linux" ]; then
