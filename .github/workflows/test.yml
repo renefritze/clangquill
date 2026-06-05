@@ -1,13 +1,10 @@
 ---
 on:
   push:
-    branches:
-    - main
+    branches: [main]
   merge_group:
   pull_request:
-    branches:
-    - main
-
+    branches: [main]
 name: pytest
 jobs:
   py-check:
@@ -17,76 +14,74 @@ jobs:
       fail-fast: false
       matrix:
         config:
-        - {os: ubuntu-24.04, py: '3.13'}
-
+          - {os: ubuntu-24.04, py: '3.13'}
     env:
       OS: ${{ matrix.config.os }}
       PYTHON: ${{ matrix.config.py }}
     steps:
-    - name: Cancel Previous Runs
-      uses: styfle/cancel-workflow-action@0.13.1
-      with:
-        access_token: ${{ github.token }}
-    - name: Checkout
-      uses: actions/checkout@v6.0.2
-    - name: Install build dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          libclang-dev libsqlite3-dev nlohmann-json3-dev
-    - name: Install uv
-      uses: astral-sh/setup-uv@v8.1.0
-    - name: Set up Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: ${{ matrix.config.py }}
-    - name: Install dependencies
+      - name: Cancel Previous Runs
+        uses: styfle/cancel-workflow-action@0.13.1
+        with:
+          access_token: ${{ github.token }}
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libclang-dev libsqlite3-dev nlohmann-json3-dev
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.config.py }}
+      - name: Install dependencies
       # Build the core with libclang so the parser path is exercised by pytest.
-      env:
-        SKBUILD_CMAKE_DEFINE: CLANGQUILL_WITH_LIBCLANG=ON
-      run: uv sync --frozen --extra ci
-    - name: run pytest
-      run: uv run pytest
-    - name: Upload coverage
-      uses: codecov/codecov-action@v6
-      with:
-        env_vars: OS,PYTHON
-        fail_ci_if_error: false
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        env:
+          SKBUILD_CMAKE_DEFINE: CLANGQUILL_WITH_LIBCLANG=ON
+        run: uv sync --frozen --extra ci
+      - name: run pytest
+        run: uv run pytest
+      - name: Upload coverage
+        uses: codecov/codecov-action@v6
+        with:
+          env_vars: OS,PYTHON
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
     # Docs build on the distro libclang (18). The C++23/26 dogfood header is
     # gated on libclang >= 22, so here it is omitted — exercising the graceful
     # "older toolchain never fails the docs build" path.
-    - name: build docs
-      run: |
-        uv sync --frozen --extra docs
-        uv run make -C docs html
-
+      - name: build docs
+        run: |
+          uv sync --frozen --extra docs
+          uv run make -C docs html
   docs-newer-llvm:
     # The published/pages docs build: install clang 22 from apt.llvm.org so the
     # core links against it and actually parses the C++23/26 dogfood header.
     runs-on: ubuntu-24.04
     name: docs (clang 22 dogfood)
     steps:
-    - name: Checkout
-      uses: actions/checkout@v6.0.2
-    - name: Install LLVM 22 from apt.llvm.org
-      run: |
-        wget https://apt.llvm.org/llvm.sh
-        chmod +x llvm.sh
-        sudo ./llvm.sh 22
-        sudo apt-get install -y --no-install-recommends \
-          libclang-22-dev llvm-22-dev libsqlite3-dev nlohmann-json3-dev
-    - name: Install uv
-      uses: astral-sh/setup-uv@v8.1.0
-    - name: Set up Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: '3.13'
-    - name: Build core against libclang 22 and render docs
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+      - name: Install LLVM 22 from apt.llvm.org
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          sudo apt-get install -y --no-install-recommends \
+            libclang-22-dev llvm-22-dev libsqlite3-dev nlohmann-json3-dev
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Build core against libclang 22 and render docs
       # FindLibClang resolves llvm-config-22; LibClang_ROOT pins the prefix.
-      env:
-        SKBUILD_CMAKE_DEFINE: CLANGQUILL_WITH_LIBCLANG=ON;LibClang_ROOT=/usr/lib/llvm-22
-      run: |
-        uv sync --frozen --extra docs
-        uv run python -c "from clangquill._libclang import libclang_major; assert (libclang_major() or 0) >= 22, libclang_major()"
-        uv run make -C docs html
+        env:
+          SKBUILD_CMAKE_DEFINE: CLANGQUILL_WITH_LIBCLANG=ON;LibClang_ROOT=/usr/lib/llvm-22
+        run: |-
+          uv sync --frozen --extra docs
+          uv run python -c "from clangquill._libclang import libclang_major; assert (libclang_major() or 0) >= 22, libclang_major()"
+          uv run make -C docs html
