@@ -41,7 +41,18 @@ extensions = ['sphinx.ext.autodoc', 'sphinx.ext.viewcode', "autoapi.extension", 
     "sphinx.ext.autosummary",
     "sphinx.ext.linkcode",
     "sphinx.ext.intersphinx",
-    "sphinx.ext.mathjax"]
+    "sphinx.ext.mathjax",
+    # Dogfood: clangquill documents its own C++ IR data model. The extension
+    # parses the headers below at build time into the generated `cpp_api/`
+    # pages. It degrades to a no-op when the core was built without libclang.
+    "clangquill.sphinx_ext"]
+
+# clangquill self-documentation: the dependency-light public IR headers under
+# src/cpp/model. Paths are relative to this srcdir (docs/).
+clangquill_input = ["../src/cpp/model/*.hpp"]
+clangquill_include_dirs = ["../src/cpp"]
+clangquill_output_dir = "cpp_api"
+clangquill_std = "c++20"
 # this enables:
 # substitutions-with-jinja2, direct-latex-math and definition-lists
 # ref: https://myst-parser.readthedocs.io/en/latest/using/syntax-optional.html
