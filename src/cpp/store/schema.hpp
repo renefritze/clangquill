@@ -1,14 +1,22 @@
 #pragma once
 
+/**
+ * @file
+ * @brief Schema version and DDL for the intermediate SQLite artifact.
+ */
+
 namespace clangquill::store {
 
-// Bump when the DDL below changes in a backward-incompatible way.
+/// @brief On-disk schema version.
+///
+/// Bump when the DDL below changes in a backward-incompatible way.
 inline constexpr int kSchemaVersion = 2;
 
-// Full schema for the intermediate SQLite artifact. The `references` table is
-// named with a trailing underscore to avoid the SQL reserved word, and
-// intentionally has no foreign key on `to_usr` so cross-TU (and unresolved)
-// references are first class.
+/// @brief Full schema for the intermediate SQLite artifact.
+///
+/// The `references_` table is named with a trailing underscore to avoid the SQL
+/// reserved word, and intentionally has no foreign key on `to_usr` so cross-TU
+/// (and unresolved) references are first class.
 inline constexpr const char* kSchemaDDL = R"SQL(
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,

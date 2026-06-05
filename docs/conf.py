@@ -47,10 +47,47 @@ extensions = ['sphinx.ext.autodoc', 'sphinx.ext.viewcode', "autoapi.extension", 
     # pages. It degrades to a no-op when the core was built without libclang.
     "clangquill.sphinx_ext"]
 
-# clangquill self-documentation: the dependency-light public IR headers under
-# src/cpp/model. Paths are relative to this srcdir (docs/).
-clangquill_input = ["../src/cpp/model/*.hpp"]
+# clangquill self-documentation: the public C++ IR/parser/store headers under
+# src/cpp. Paths are relative to this srcdir (docs/). The parser headers pull in
+# <clang-c/Index.h> and the store headers <sqlite3.h>; sqlite3.h is on the
+# default /usr/include search path, but clang-c lives under the LLVM include dir
+# (e.g. /usr/lib/llvm-18/include), so it must be added explicitly or libclang
+# fails to resolve it -- and a `-W` docs build turns that diagnostic into an
+# error. We discover it the same way cmake/FindLibClang.cmake does, via
+# `llvm-config --includedir`.
+clangquill_input = [
+    "../src/cpp/core/*.hpp",
+    "../src/cpp/model/*.hpp",
+    "../src/cpp/hash/*.hpp",
+    "../src/cpp/parser/*.hpp",
+    "../src/cpp/store/*.hpp",
+]
 clangquill_include_dirs = ["../src/cpp"]
+
+
+def _llvm_includedir():
+    """Return the LLVM include dir (holding clang-c/) via llvm-config, or None."""
+    import shutil  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+
+    for exe in ("llvm-config", "llvm-config-18", "llvm-config-17"):
+        path = shutil.which(exe)
+        if not path:
+            continue
+        try:
+            out = subprocess.run(  # noqa: S603
+                [path, "--includedir"], capture_output=True, text=True, check=True
+            )
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        includedir = out.stdout.strip()
+        if includedir and os.path.isdir(includedir):
+            return includedir
+    return None
+
+
+_llvm_inc = _llvm_includedir()
+clangquill_compile_args = [f"-I{_llvm_inc}"] if _llvm_inc else []
 clangquill_output_dir = "cpp_api"
 clangquill_std = "c++20"
 # this enables:

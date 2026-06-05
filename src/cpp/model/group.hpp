@@ -2,25 +2,33 @@
 
 #include <string>
 
+/**
+ * @file
+ * @brief Doxygen group definitions and symbol-to-group membership records.
+ */
+
 namespace clangquill::model {
 
-// A Doxygen documentation group (`\defgroup`/`\addtogroup`). `id` is the group
-// token (stable identity); `parent_group_id` is set when the group's own block
-// carries an `\ingroup` to nest it under another group.
+/// @brief A Doxygen documentation group (`\defgroup` / `\addtogroup`).
+///
+/// `id` is the group token (stable identity); `parent_group_id` is set when the
+/// group's own block carries an `\ingroup` to nest it under another group.
 struct Group {
-  std::string id;
-  std::string title;
-  std::string brief;
-  std::string detail;
-  std::string parent_group_id;  // empty for a top-level group
+  std::string id;               ///< The group token; stable identity.
+  std::string title;            ///< Human-readable group title.
+  std::string brief;            ///< One-line group summary.
+  std::string detail;           ///< Longer group description.
+  std::string parent_group_id;  ///< Enclosing group token; empty for a top-level group.
 };
 
-// Membership of a symbol in a group, recorded from an `\ingroup` (or inline
-// `\defgroup`) on the symbol's own comment.
+/// @brief Membership of a symbol in a group.
+///
+/// Recorded from an `\ingroup` (or inline `\defgroup`) on the symbol's own
+/// comment.
 struct GroupMember {
-  std::string group_id;
-  std::string member_usr;
-  int ordinal = 0;
+  std::string group_id;    ///< The group the member belongs to.
+  std::string member_usr;  ///< USR of the member symbol.
+  int ordinal = 0;         ///< Position within the group for stable ordering.
 };
 
 }  // namespace clangquill::model

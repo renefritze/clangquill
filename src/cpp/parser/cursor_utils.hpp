@@ -7,16 +7,25 @@
 
 #include "model/symbol.hpp"
 
+/**
+ * @file
+ * @brief Small helpers over libclang cursors: strings, names, and signatures.
+ */
+
 namespace clangquill::parser {
 
-// RAII wrapper that guarantees clang_disposeString.
+/// @brief RAII wrapper that guarantees `clang_disposeString`.
 class ScopedCXString {
  public:
+  /// @brief Takes ownership of @p s.
+  /// @param s The libclang string to dispose on destruction.
   explicit ScopedCXString(CXString s) : s_(s) {}
   ~ScopedCXString() { clang_disposeString(s_); }
   ScopedCXString(const ScopedCXString&) = delete;
   ScopedCXString& operator=(const ScopedCXString&) = delete;
 
+  /// @brief Returns the wrapped string as a `std::string`.
+  /// @return The C string, or "" when null.
   std::string str() const {
     const char* c = clang_getCString(s_);
     return c ? c : "";
@@ -26,51 +35,93 @@ class ScopedCXString {
   CXString s_;
 };
 
+/// @brief Converts a `CXString` to `std::string`, disposing the original.
+/// @param s The libclang string to convert (consumed).
+/// @return Its text, or "" when null.
 inline std::string to_string(CXString s) { return ScopedCXString(s).str(); }
 
+/// @brief Returns a cursor's spelling (unqualified name).
+/// @param c The cursor to inspect.
+/// @return The spelling text.
 inline std::string spelling(CXCursor c) {
   return to_string(clang_getCursorSpelling(c));
 }
+/// @brief Returns a cursor's display name (includes parameters for overloads).
+/// @param c The cursor to inspect.
+/// @return The display-name text.
 inline std::string display_name(CXCursor c) {
   return to_string(clang_getCursorDisplayName(c));
 }
+/// @brief Returns a cursor's USR (unified symbol resolution string).
+/// @param c The cursor to inspect.
+/// @return The USR text.
 inline std::string usr(CXCursor c) {
   return to_string(clang_getCursorUSR(c));
 }
 
-// Maps a libclang cursor kind to our SymbolKind, or Unknown if not a documented
-// entity in M2.
+/// @brief Maps a libclang cursor kind to our SymbolKind.
+/// @param kind The libclang cursor kind.
+/// @return The mapped kind, or `Unknown` if not a documented entity in M2.
 model::SymbolKind map_kind(CXCursorKind kind);
 
-// USR of the canonical cursor (collapses forward decls and definitions).
+/// @brief Returns the USR of the canonical cursor.
+///
+/// Collapses forward declarations and definitions to a single identity.
+/// @param c The cursor to canonicalize.
+/// @return The canonical USR.
 std::string canonical_usr(CXCursor c);
 
-// Qualified name built by walking semantic parents (e.g. "geo::Circle").
+/// @brief Builds a qualified name by walking semantic parents (e.g. `geo::Circle`).
+/// @param c The cursor to name.
+/// @return The fully qualified name.
 std::string qualified_name(CXCursor c);
 
-// Pretty-printed declaration with terse output (no body); empty on failure.
+/// @brief Pretty-prints a declaration with terse output (no body).
+/// @param c The cursor to print.
+/// @return The signature text; empty on failure.
 std::string pretty_signature(CXCursor c);
 
-// Reconstructs a macro's declaration text: "NAME" for object-like macros and
-// "NAME(a, b)" for function-like macros (recovered by tokenizing the extent,
-// since libclang exposes no macro-parameter API). Falls back to the spelling.
+/// @brief Reconstructs a macro's declaration text.
+///
+/// Yields `"NAME"` for object-like macros and `"NAME(a, b)"` for function-like
+/// macros (recovered by tokenizing the extent, since libclang exposes no
+/// macro-parameter API). Falls back to the spelling.
+/// @param c The macro-definition cursor.
+/// @return The reconstructed macro signature.
 std::string macro_signature(CXCursor c);
 
-// Builds the leading "template<...>" clause for a template/concept owner from
-// its declaration tokens (libclang exposes no default-argument API). Returns ""
-// when the owner has no template head. When `defaults_out` is non-null it is
-// filled with the per-parameter default text (text after a top-level '='), one
-// entry per template parameter in declaration order.
+/// @brief Builds the leading `template<...>` clause for a template/concept owner.
+///
+/// Reconstructed from the declaration tokens (libclang exposes no
+/// default-argument API).
+/// @param owner The template or concept cursor.
+/// @param defaults_out When non-null, filled with the per-parameter default
+///   text (text after a top-level `=`), one entry per template parameter in
+///   declaration order.
+/// @return The `template<...>` head, or "" when the owner has no template head.
 std::string template_head(CXCursor owner, std::vector<std::string>* defaults_out);
 
-// Default-argument text of a function parameter cursor, recovered by scanning
-// its tokens for a top-level '='; "" when there is none.
+/// @brief Recovers the default-argument text of a function parameter cursor.
+///
+/// Scans its tokens for a top-level `=`.
+/// @param param The parameter cursor.
+/// @return The default text, or "" when there is none.
 std::string param_default(CXCursor param);
 
+/// @brief Maps a cursor's C++ access specifier to AccessKind.
+/// @param c The cursor to inspect.
+/// @return The mapped access level.
 model::AccessKind map_access(CXCursor c);
+
+/// @brief Maps a cursor's storage class to StorageKind.
+/// @param c The cursor to inspect.
+/// @return The mapped storage class.
 model::StorageKind map_storage(CXCursor c);
 
-// True when the cursor's location is in the given main file path.
+/// @brief Tests whether a cursor's location is in the given main file.
+/// @param c The cursor to test.
+/// @param main_file The main file path to compare against.
+/// @return `true` when @p c is declared in @p main_file.
 bool in_file(CXCursor c, const std::string& main_file);
 
 }  // namespace clangquill::parser
