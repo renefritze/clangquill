@@ -20,7 +20,7 @@ jobs:
                 # Build each Linux arch on its own native runner (arm64 runners
                 # are free for public repos) — far faster than QEMU emulation.
                 include:
-                    - os: ubuntu-latest
+                    - os: ubuntu-24.04
                       arch: x86_64
                     - os: ubuntu-24.04-arm
                       arch: aarch64
@@ -71,7 +71,7 @@ jobs:
 
     build_sdist:
         name: Source distribution
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         steps:
             - uses: actions/checkout@v6.0.2
               with:

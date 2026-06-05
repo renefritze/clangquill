@@ -15,8 +15,12 @@ if(CLANGQUILL_WITH_LIBCLANG STREQUAL "OFF")
   return()
 endif()
 
-# Allow an llvm-config to point us at the right prefix.
-find_program(LLVM_CONFIG_EXECUTABLE NAMES llvm-config llvm-config-18 llvm-config-17)
+# Allow an llvm-config to point us at the right prefix. Newer versions are
+# listed first so a recent toolchain wins (c++23/c++26 need a recent clang).
+find_program(LLVM_CONFIG_EXECUTABLE NAMES
+  llvm-config
+  llvm-config-22 llvm-config-21 llvm-config-20 llvm-config-19
+  llvm-config-18 llvm-config-17)
 if(LLVM_CONFIG_EXECUTABLE)
   execute_process(
     COMMAND "${LLVM_CONFIG_EXECUTABLE}" --includedir
@@ -36,7 +40,8 @@ find_path(
 
 find_library(
   LibClang_LIBRARY
-  NAMES clang libclang clang-18 clang-17
+  NAMES clang libclang
+        clang-22 clang-21 clang-20 clang-19 clang-18 clang-17
   HINTS ${LibClang_ROOT} ${_llvm_libdir}
   PATH_SUFFIXES lib lib64)
 

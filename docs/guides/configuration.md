@@ -19,7 +19,7 @@ The field-name-to-front-end mapping is mechanical:
 | `compile_commands` | `clangquill_compile_commands` | `None` | Directory holding a `compile_commands.json`. When set it supplies the compiler flags and **overrides** `std`/`include_dirs`/`defines`. |
 | `compile_args` | `clangquill_compile_args` | `[]` | Extra compiler arguments appended verbatim when no compile database is used. |
 | `include_dirs` | `clangquill_include_dirs` | `[]` | `-I` include directories. |
-| `std` | `clangquill_std` | `"c++20"` | C++ standard, passed as `-std=<std>`. |
+| `std` | `clangquill_std` | `"c++20"` | C++ standard, passed verbatim as `-std=<std>` (see note). |
 | `defines` | `clangquill_defines` | `[]` | `-D` preprocessor definitions (`NAME` or `NAME=value`). |
 | `clang_resource_dir` | `clangquill_clang_resource_dir` | `None` | Clang resource directory (`-resource-dir`); `None` lets clang decide. |
 
@@ -45,4 +45,14 @@ The field-name-to-front-end mapping is mechanical:
 ```{note}
 Doxygen `\defgroup` groups, when present, add one page per group after the
 symbol/file pages; the toctree picks them up automatically.
+```
+
+```{note}
+**Newer standards (C++23 / C++26).** Whatever `std` you set is handed straight
+to clang, so any spelling clang accepts works — `c++17`/`c++20`/`c++23`/`c++26`,
+the `c++2b`/`c++2c` aliases, and the GNU-extension variants `gnu++23`/`gnu++26`.
+*Which* of them actually parse depends on the libclang the wheel was built
+against: `c++23` needs clang ≥ 17 and full `c++26` a recent clang (the published
+wheels target libclang 18+). No validation happens up front — an unsupported
+spelling surfaces as a clang diagnostic during parsing.
 ```

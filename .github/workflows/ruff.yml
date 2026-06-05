@@ -3,7 +3,7 @@ name: ruff
 on: [pull_request]
 jobs:
   ruff:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6.0.2
       - name: Install build dependencies

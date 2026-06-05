@@ -53,6 +53,16 @@ clangquill_input = ["../src/cpp/model/*.hpp"]
 clangquill_include_dirs = ["../src/cpp"]
 clangquill_output_dir = "cpp_api"
 clangquill_std = "c++20"
+
+# Optionally dogfood newer-standard features. The C++23/26 showcase header only
+# parses on a recent libclang, so we gate it on the linked backend's version:
+# on an older toolchain (e.g. Read the Docs' Ubuntu libclang 18) the page is
+# omitted and the build stays warning-free rather than failing.
+from clangquill._libclang import libclang_major  # noqa: E402
+
+if (libclang_major() or 0) >= 22:
+    clangquill_std = "c++26"
+    clangquill_input = [*clangquill_input, "examples/cpp23_features.hpp"]
 # this enables:
 # substitutions-with-jinja2, direct-latex-math and definition-lists
 # ref: https://myst-parser.readthedocs.io/en/latest/using/syntax-optional.html
