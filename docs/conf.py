@@ -66,11 +66,40 @@ clangquill_include_dirs = ["../src/cpp"]
 
 
 def _llvm_includedir():
-    """Return the LLVM include dir (holding clang-c/) via llvm-config, or None."""
+    """Return the LLVM include dir holding ``clang-c/Index.h``, or None.
+
+    Mirrors ``cmake/FindLibClang.cmake``: honor ``LibClang_ROOT`` (set by the
+    clang-22 dogfood CI job), then ask the ``llvm-config`` matching the linked
+    backend's major version, then fall back to an unversioned/any ``llvm-config``
+    on PATH. Only a directory that actually contains ``clang-c/Index.h`` is
+    returned, so a version mismatch never yields a bogus include path.
+    """
     import shutil  # noqa: PLC0415
     import subprocess  # noqa: PLC0415
 
-    for exe in ("llvm-config", "llvm-config-18", "llvm-config-17"):
+    from clangquill._libclang import libclang_major  # noqa: PLC0415
+
+    def _has_clang_c(directory):
+        return bool(directory) and os.path.isfile(
+            os.path.join(directory, "clang-c", "Index.h")
+        )
+
+    # 1. LibClang_ROOT/include (the CI dogfood job pins the prefix this way).
+    root = os.environ.get("LibClang_ROOT")
+    if root and _has_clang_c(os.path.join(root, "include")):
+        return os.path.join(root, "include")
+
+    # 2. llvm-config, preferring the one matching the linked libclang major.
+    candidates = []
+    major = libclang_major()
+    if major:
+        candidates.append(f"llvm-config-{major}")
+    candidates += ["llvm-config", *(f"llvm-config-{v}" for v in range(22, 16, -1))]
+    seen = set()
+    for exe in candidates:
+        if exe in seen:
+            continue
+        seen.add(exe)
         path = shutil.which(exe)
         if not path:
             continue
@@ -81,7 +110,7 @@ def _llvm_includedir():
         except (OSError, subprocess.CalledProcessError):
             continue
         includedir = out.stdout.strip()
-        if includedir and os.path.isdir(includedir):
+        if _has_clang_c(includedir):
             return includedir
     return None
 
