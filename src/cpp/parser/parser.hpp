@@ -6,30 +6,41 @@
 
 #include "model/module.hpp"
 
+/**
+ * @file
+ * @brief Translation-unit driver that turns C++ sources into the IR model.
+ */
+
 namespace clangquill::parser {
 
-// Options controlling how a translation unit is parsed. Mirrors the binding
-// layer's ParseOptions.
+/// @brief Options controlling how a translation unit is parsed.
+///
+/// Mirrors the binding layer's `ParseOptions`.
 struct ParseOptions {
-  std::string std_flag = "c++20";  // -> -std=c++20
-  std::vector<std::string> include_dirs;
-  std::vector<std::string> defines;
-  std::vector<std::string> extra_args;
-  std::optional<std::string> compile_commands_dir;
-  bool keep_going = true;
+  std::string std_flag = "c++20";  ///< C++ standard, passed as `-std=<flag>`.
+  std::vector<std::string> include_dirs;  ///< `-I` include directories.
+  std::vector<std::string> defines;       ///< `-D` preprocessor definitions.
+  std::vector<std::string> extra_args;    ///< Extra compiler arguments appended verbatim.
+  std::optional<std::string> compile_commands_dir;  ///< Directory holding a compile_commands.json.
+  bool keep_going = true;  ///< Continue past recoverable parse errors.
 };
 
-// Drives libclang over one translation unit at a time, appending extracted IR
-// into a ParsedModule. Owns a reusable CXIndex.
+/// @brief Drives libclang over one translation unit at a time.
+///
+/// Appends extracted IR into a ParsedModule and owns a reusable CXIndex.
 class Parser {
  public:
+  /// @brief Constructs a parser with the given options.
+  /// @param options Parse configuration applied to every file.
   explicit Parser(ParseOptions options);
   ~Parser();
   Parser(const Parser&) = delete;
   Parser& operator=(const Parser&) = delete;
 
-  // Parses one input file, appending into `out`. Returns false on hard failure
-  // (translation unit could not be created).
+  /// @brief Parses one input file, appending its IR into @p out.
+  /// @param path Path of the translation unit to parse.
+  /// @param out Module that extracted rows are appended to.
+  /// @return `false` on hard failure (the translation unit could not be created).
   bool parse_file(const std::string& path, model::ParsedModule& out);
 
  private:

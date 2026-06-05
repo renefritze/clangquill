@@ -308,8 +308,7 @@ class Generator:
             sig = symbol.signature or f"{symbol.spelling}()"
             return self._qualify(sig, symbol)
         if symbol.kind in (SymbolKind.VARIABLE, SymbolKind.FIELD):
-            type_repr = symbol.type_repr.strip()
-            return f"{type_repr} {symbol.qualified_name}".strip()
+            return self._variable_declaration(symbol)
         if symbol.kind in (SymbolKind.TYPEDEF, SymbolKind.TYPE_ALIAS):
             target = self._underlying(symbol)
             return f"{symbol.qualified_name} = {target}" if target else symbol.qualified_name
@@ -328,6 +327,30 @@ class Generator:
             head = f"{symbol.signature} " if symbol.signature else ""
             return head + symbol.qualified_name + self.base_clause(symbol)
         return symbol.qualified_name
+
+    #: Trailing C array extent(s) on a type spelling, e.g. ``[8]`` or ``[2][3]``.
+    _ARRAY_EXTENT = re.compile(r"(?:\s*\[[^\]]*\])+$")
+
+    def _variable_declaration(self, symbol: Symbol) -> str:
+        """Build the ``type name`` directive argument for a variable/field.
+
+        clang spells an array type with the extent on the type (``int[8]``), but
+        a C++ declaration places it after the declarator (``int name[8]``); move a
+        trailing extent across the name so the ``cpp:`` domain can parse it.
+
+        Only a *plain* array (``T[N]``) is rearranged. Complex declarators where
+        the name belongs inside parentheses -- pointer/reference to array
+        (``int (*)[8]``) or an array of function pointers -- carry a ``(`` in the
+        base, and splicing the name on the end would still be invalid C++; those
+        are left untouched (they do not occur in the documented headers).
+        """
+        type_repr = symbol.type_repr.strip()
+        extent = self._ARRAY_EXTENT.search(type_repr)
+        if extent:
+            base = type_repr[: extent.start()].strip()
+            if "(" not in base:
+                return f"{base} {symbol.qualified_name}{extent.group().strip()}".strip()
+        return f"{type_repr} {symbol.qualified_name}".strip()
 
     def _qualify(self, signature: str, symbol: Symbol) -> str:
         """Inject the qualified name into a bare pretty-printed signature."""

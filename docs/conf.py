@@ -47,10 +47,76 @@ extensions = ['sphinx.ext.autodoc', 'sphinx.ext.viewcode', "autoapi.extension", 
     # pages. It degrades to a no-op when the core was built without libclang.
     "clangquill.sphinx_ext"]
 
-# clangquill self-documentation: the dependency-light public IR headers under
-# src/cpp/model. Paths are relative to this srcdir (docs/).
-clangquill_input = ["../src/cpp/model/*.hpp"]
+# clangquill self-documentation: the public C++ IR/parser/store headers under
+# src/cpp. Paths are relative to this srcdir (docs/). The parser headers pull in
+# <clang-c/Index.h> and the store headers <sqlite3.h>; sqlite3.h is on the
+# default /usr/include search path, but clang-c lives under the LLVM include dir
+# (e.g. /usr/lib/llvm-18/include), so it must be added explicitly or libclang
+# fails to resolve it -- and a `-W` docs build turns that diagnostic into an
+# error. We discover it the same way cmake/FindLibClang.cmake does, via
+# `llvm-config --includedir`.
+clangquill_input = [
+    "../src/cpp/core/*.hpp",
+    "../src/cpp/model/*.hpp",
+    "../src/cpp/hash/*.hpp",
+    "../src/cpp/parser/*.hpp",
+    "../src/cpp/store/*.hpp",
+]
 clangquill_include_dirs = ["../src/cpp"]
+
+
+def _llvm_includedir():
+    """Return the LLVM include dir holding ``clang-c/Index.h``, or None.
+
+    Mirrors ``cmake/FindLibClang.cmake``: honor ``LibClang_ROOT`` (set by the
+    clang-22 dogfood CI job), then ask the ``llvm-config`` matching the linked
+    backend's major version, then fall back to an unversioned/any ``llvm-config``
+    on PATH. Only a directory that actually contains ``clang-c/Index.h`` is
+    returned, so a version mismatch never yields a bogus include path.
+    """
+    import shutil  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+
+    from clangquill._libclang import libclang_major  # noqa: PLC0415
+
+    def _has_clang_c(directory):
+        return bool(directory) and os.path.isfile(
+            os.path.join(directory, "clang-c", "Index.h")
+        )
+
+    # 1. LibClang_ROOT/include (the CI dogfood job pins the prefix this way).
+    root = os.environ.get("LibClang_ROOT")
+    if root and _has_clang_c(os.path.join(root, "include")):
+        return os.path.join(root, "include")
+
+    # 2. llvm-config, preferring the one matching the linked libclang major.
+    candidates = []
+    major = libclang_major()
+    if major:
+        candidates.append(f"llvm-config-{major}")
+    candidates += ["llvm-config", *(f"llvm-config-{v}" for v in range(22, 16, -1))]
+    seen = set()
+    for exe in candidates:
+        if exe in seen:
+            continue
+        seen.add(exe)
+        path = shutil.which(exe)
+        if not path:
+            continue
+        try:
+            out = subprocess.run(  # noqa: S603
+                [path, "--includedir"], capture_output=True, text=True, check=True
+            )
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        includedir = out.stdout.strip()
+        if _has_clang_c(includedir):
+            return includedir
+    return None
+
+
+_llvm_inc = _llvm_includedir()
+clangquill_compile_args = [f"-I{_llvm_inc}"] if _llvm_inc else []
 clangquill_output_dir = "cpp_api"
 clangquill_std = "c++20"
 
