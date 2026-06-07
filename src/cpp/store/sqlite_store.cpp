@@ -98,7 +98,7 @@ void SqliteStore::write(const model::ParsedModule& module, const Meta& meta) {
 
   {
     Stmt p(db_,
-           "INSERT INTO function_parameters(function_usr, idx, name, "
+           "INSERT OR REPLACE INTO function_parameters(function_usr, idx, name, "
            "type_repr, default_value) VALUES(?,?,?,?,?);");
     for (const auto& param : module.parameters) {
       p.reset();
@@ -113,7 +113,8 @@ void SqliteStore::write(const model::ParsedModule& module, const Meta& meta) {
 
   {
     Stmt t(db_,
-           "INSERT INTO template_parameters(owner_usr, idx, param_kind, name, "
+           "INSERT OR REPLACE INTO template_parameters(owner_usr, idx, "
+           "param_kind, name, "
            "type_repr, default_repr) VALUES(?,?,?,?,?,?);");
     for (const auto& tp : module.template_parameters) {
       t.reset();
