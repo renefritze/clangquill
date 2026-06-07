@@ -136,3 +136,57 @@ TEST_CASE("SqliteStore write/read round-trips the IR", "[store]") {
 
   std::remove(path.c_str());
 }
+
+TEST_CASE("SqliteStore tolerates a symbol seen in multiple translation units",
+          "[store]") {
+  model::ParsedModule m;
+
+  model::Symbol fn;
+  fn.usr = "c:@F@clamp";
+  fn.kind = model::SymbolKind::Function;
+  fn.spelling = "clamp";
+  fn.qualified_name = "clamp";
+  fn.display_name = "clamp(int)";
+  m.symbols.push_back(fn);
+
+  model::Symbol tmpl;
+  tmpl.usr = "c:@FT@>1#Tidentity";
+  tmpl.kind = model::SymbolKind::Function;
+  tmpl.spelling = "identity";
+  tmpl.qualified_name = "identity";
+  tmpl.display_name = "identity";
+  m.symbols.push_back(tmpl);
+
+  // Same symbol emitted twice -> parameter rows collide on (usr, idx).
+  for (int seen = 0; seen < 2; ++seen) {
+    model::FunctionParameter p;
+    p.function_usr = "c:@F@clamp";
+    p.index = 0;
+    p.name = "value";
+    p.type_repr = "int";
+    m.parameters.push_back(p);
+
+    model::TemplateParameter tp;
+    tp.owner_usr = "c:@FT@>1#Tidentity";
+    tp.index = 0;
+    tp.kind = model::TemplateParameter::Kind::Type;
+    tp.name = "T";
+    m.template_parameters.push_back(tp);
+  }
+
+  std::string path = temp_db_path();
+  {
+    store::SqliteStore writer(path);
+    REQUIRE_NOTHROW(writer.write(m, store::Meta::current()));
+  }
+
+  store::SqliteStore reader(path);
+  model::ParsedModule got = reader.read();
+
+  REQUIRE(got.parameters.size() == 1);
+  CHECK(got.parameters[0].name == "value");
+  REQUIRE(got.template_parameters.size() == 1);
+  CHECK(got.template_parameters[0].name == "T");
+
+  std::remove(path.c_str());
+}
