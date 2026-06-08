@@ -165,7 +165,9 @@ class Generator:
         to a replacement template stem. ``include_undocumented`` controls
         whether symbols lacking a documentation comment are emitted.
         ``comment_parser`` overrides the comment format (a registered name or a
-        dotted import path) for every symbol.
+        dotted import path) for every symbol. ``path_base`` is the directory
+        that rendered file paths are shown relative to; ``None`` leaves the
+        absolute paths libclang reports unchanged (see :meth:`_relpath`).
         """
         self.store = store
         self.include_undocumented = include_undocumented
