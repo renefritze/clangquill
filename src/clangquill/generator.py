@@ -180,6 +180,10 @@ class Generator:
         # file: a namespace spans files, but its page-local section must only
         # show the members physically declared in the file being rendered.
         self._file_scope: int | None = None
+        # Memoise the (visible) file-roots per file: file grouping asks for them
+        # twice (the page gate and the render), and the result is stable for a
+        # given store.
+        self._file_roots_cache: dict[int, list[Symbol]] = {}
         loaders: list[FileSystemLoader | PackageLoader] = []
         if template_dirs:
             loaders.append(FileSystemLoader([str(d) for d in template_dirs]))
@@ -224,13 +228,18 @@ class Generator:
         return [r for r in self.store.roots() if self._visible(r)]
 
     def file_roots(self, file_id: int) -> list[Symbol]:
-        """Return the visible top-of-file symbols declared in ``file_id``."""
+        """Return the visible top-of-file symbols declared in ``file_id`` (memoised)."""
+        cached = self._file_roots_cache.get(file_id)
+        if cached is not None:
+            return cached
         previous = self._file_scope
         self._file_scope = file_id
         try:
-            return [s for s in self.store.file_roots(file_id) if self._visible(s)]
+            roots = [s for s in self.store.file_roots(file_id) if self._visible(s)]
         finally:
             self._file_scope = previous
+        self._file_roots_cache[file_id] = roots
+        return roots
 
     def _visible(self, symbol: Symbol) -> bool:
         """Whether ``symbol`` should appear, honouring ``include_undocumented``.
@@ -484,7 +493,7 @@ class Generator:
         previous = self._file_scope
         self._file_scope = source_file.id
         try:
-            symbols = [s for s in self.store.file_roots(source_file.id) if self._visible(s)]
+            symbols = self.file_roots(source_file.id)
             text = template.render(file=source_file, symbols=symbols, level=level)
         finally:
             self._file_scope = previous
