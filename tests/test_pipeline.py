@@ -84,6 +84,19 @@ def test_build_generates_pages_and_index(project: Path) -> None:
 
 
 @requires_libclang
+def test_build_path_base_reroots_file_headings(project: Path) -> None:
+    # With group_by="file" the heading renders the source path; path_base="."
+    # re-roots it against the project so the absolute build-machine path the IR
+    # stores never leaks into the output.
+    config = Config(input=["demo.hpp"], output_dir="api", group_by="file", path_base=".")
+    build(config, base_dir=project)
+
+    page = (project / "api" / "demo_hpp.md").read_text()
+    assert page.startswith("# File `demo.hpp`")
+    assert str(project.resolve()) not in page
+
+
+@requires_libclang
 def test_build_caches_db_when_cache_dir_set(project: Path) -> None:
     config = Config(input=["demo.hpp"], cache_dir=".cache")
     result = build(config, base_dir=project)
