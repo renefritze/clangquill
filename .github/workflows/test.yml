@@ -24,7 +24,7 @@ jobs:
         with:
           access_token: ${{ github.token }}
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v6.0.3
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -44,7 +44,7 @@ jobs:
       - name: run pytest
         run: uv run pytest
       - name: Upload coverage
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v6.0.1
         with:
           env_vars: OS,PYTHON
           fail_ci_if_error: false
@@ -63,7 +63,7 @@ jobs:
     name: docs (clang 22 dogfood)
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v6.0.3
       - name: Install LLVM 22 from apt.llvm.org
         run: |
           wget https://apt.llvm.org/llvm.sh

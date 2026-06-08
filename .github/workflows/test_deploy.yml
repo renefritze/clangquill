@@ -25,7 +25,7 @@ jobs:
           - os: ubuntu-24.04-arm
             arch: aarch64
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6.0.3
         with:
                   # full history so setuptools_scm derives the version
           fetch-depth: 0
@@ -33,7 +33,7 @@ jobs:
               # A plain `python -m build --wheel` tags the artefact
               # linux_<arch>, which PyPI rejects. cibuildwheel produces the
               # manylinux-tagged wheels PyPI accepts.
-        uses: pypa/cibuildwheel@v3.4
+        uses: pypa/cibuildwheel@v3.4.1
         env:
                   # The core links sqlite3 + nlohmann-json, sourced via vcpkg
                   # inside the manylinux image (apt is unavailable there). vcpkg
@@ -81,7 +81,7 @@ jobs:
     name: Source distribution
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6.0.3
         with:
           fetch-depth: 0
       - name: Set up Python
