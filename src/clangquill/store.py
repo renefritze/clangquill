@@ -228,6 +228,28 @@ class Store:
         )
         return [self._to_symbol(row) for row in self._con.execute(sql)]
 
+    def file_roots(self, file_id: int) -> list[Symbol]:
+        """Return the top-level symbols *within* ``file_id``.
+
+        A symbol is a file-root when it is declared in the file and its
+        enclosing scope is not. This is what :meth:`roots` (global scope only)
+        cannot express for namespaced code: a namespace is opened in many files
+        but recorded once, against a single ``file_id``, so a class declared in
+        a different file has a parent that lives elsewhere. Such a class is the
+        natural top-of-file entry for its own file even though it is not a
+        global root. Members whose parent *is* in the same file (a class and its
+        methods) are left to render under that parent, not repeated here.
+        """
+        sql = (
+            f"SELECT {self._SYMBOL_COLUMNS} FROM symbols AS s "  # noqa: S608
+            "WHERE s.file_id = ? AND ("
+            "s.parent_usr IS NULL OR s.parent_usr = '' "
+            "OR NOT EXISTS (SELECT 1 FROM symbols AS p "
+            "WHERE p.usr = s.parent_usr AND p.file_id = s.file_id)) "
+            "ORDER BY kind, qualified_name"
+        )
+        return [self._to_symbol(row) for row in self._con.execute(sql, (file_id,))]
+
     def children(self, parent_usr: str) -> list[Symbol]:
         """Return the direct children of ``parent_usr`` in declaration-friendly order."""
         sql = (

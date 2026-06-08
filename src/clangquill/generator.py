@@ -174,7 +174,12 @@ class Generator:
         self.comment_parser = comment_parser
         self._path_base = str(path_base) if path_base is not None else None
         self._template_overrides = {k.lower(): v for k, v in (templates or {}).items()}
-        self._documented_descendant: dict[str, bool] = {}
+        self._documented_descendant: dict[tuple[int | None, str], bool] = {}
+        # When rendering a single file's page (group_by="file"), this holds that
+        # file's id so the otherwise file-agnostic child walk stays inside the
+        # file: a namespace spans files, but its page-local section must only
+        # show the members physically declared in the file being rendered.
+        self._file_scope: int | None = None
         loaders: list[FileSystemLoader | PackageLoader] = []
         if template_dirs:
             loaders.append(FileSystemLoader([str(d) for d in template_dirs]))
@@ -206,34 +211,54 @@ class Generator:
     # -- relation / child queries (thin pass-throughs for templates) ----------
 
     def children(self, symbol: Symbol) -> list[Symbol]:
-        """Return the visible direct children of ``symbol``."""
+        """Return the visible direct children of ``symbol``.
+
+        Under a file scope (file-grouped pages) children declared in other files
+        are dropped, so a namespace re-opened across files only contributes the
+        members that physically belong to the page being rendered.
+        """
         return [c for c in self.store.children(symbol.usr) if self._visible(c)]
 
     def roots(self) -> list[Symbol]:
         """Return the visible top-level symbols of the database."""
         return [r for r in self.store.roots() if self._visible(r)]
 
+    def file_roots(self, file_id: int) -> list[Symbol]:
+        """Return the visible top-of-file symbols declared in ``file_id``."""
+        previous = self._file_scope
+        self._file_scope = file_id
+        try:
+            return [s for s in self.store.file_roots(file_id) if self._visible(s)]
+        finally:
+            self._file_scope = previous
+
     def _visible(self, symbol: Symbol) -> bool:
         """Whether ``symbol`` should appear, honouring ``include_undocumented``.
 
         An undocumented container is still shown when it transitively contains a
         documented symbol, so suppressing undocumented leaves never hides the
-        scope that holds documented members.
+        scope that holds documented members. Under a file scope, a symbol from a
+        different file is never shown (and the descendant search likewise stays
+        within the file), so a file page lists only its own declarations.
         """
+        if self._file_scope is not None and symbol.file_id != self._file_scope:
+            return False
         if self.include_undocumented or symbol.is_documented:
             return True
         return self._has_documented_descendant(symbol.usr)
 
     def _has_documented_descendant(self, usr: str) -> bool:
-        cached = self._documented_descendant.get(usr)
+        key = (self._file_scope, usr)
+        cached = self._documented_descendant.get(key)
         if cached is not None:
             return cached
         # Guard against pathological cycles in malformed IR.
-        self._documented_descendant[usr] = False
-        result = any(
-            child.is_documented or self._has_documented_descendant(child.usr) for child in self.store.children(usr)
-        )
-        self._documented_descendant[usr] = result
+        self._documented_descendant[key] = False
+        children = self.store.children(usr)
+        if self._file_scope is not None:
+            children = [c for c in children if c.file_id == self._file_scope]
+        result = any(child.is_documented or self._has_documented_descendant(child.usr) for child in children)
+        self._documented_descendant[key] = result
         return result
 
     def parameters(self, symbol: Symbol) -> list[Parameter]:
@@ -448,10 +473,22 @@ class Generator:
         return _normalize(template.render(symbol=symbol, level=level))
 
     def render_file(self, source_file: SourceFile, *, level: int = 1) -> str:
-        """Render every top-level symbol declared in ``source_file``."""
+        """Render every top-of-file symbol declared in ``source_file``.
+
+        Top-of-file symbols are this file's :meth:`~clangquill.store.Store.file_roots`
+        (declarations whose enclosing scope lives in another file or at global
+        scope), not just global roots — otherwise a file holding only
+        namespace-nested symbols would render nothing.
+        """
         template = self.env.get_template("file.md.jinja")
-        symbols = [s for s in self.roots() if s.file_id == source_file.id]
-        return _normalize(template.render(file=source_file, symbols=symbols, level=level))
+        previous = self._file_scope
+        self._file_scope = source_file.id
+        try:
+            symbols = [s for s in self.store.file_roots(source_file.id) if self._visible(s)]
+            text = template.render(file=source_file, symbols=symbols, level=level)
+        finally:
+            self._file_scope = previous
+        return _normalize(text)
 
     def render_group(self, group: Group, *, level: int = 1) -> str:
         """Render a single documentation group page (members + subgroups)."""
@@ -519,14 +556,17 @@ class Generator:
         return pages
 
     def _render_file_pages(self) -> list[RenderedPage]:
-        """Render one page per parsed source file that declares a root symbol."""
+        """Render one page per parsed source file that declares any symbol.
+
+        A file qualifies on its :meth:`file_roots` (the symbols physically
+        declared in it), so files whose content lives entirely inside a
+        namespace opened elsewhere still get a page — they would otherwise
+        vanish, since only global roots used to count.
+        """
         pages: list[RenderedPage] = []
         seen: set[str] = set()
-        roots_by_file: dict[int | None, list[Symbol]] = {}
-        for root in self.roots():
-            roots_by_file.setdefault(root.file_id, []).append(root)
         for source_file in self.store.files():
-            if not roots_by_file.get(source_file.id):
+            if not self.file_roots(source_file.id):
                 continue
             # The IR stores resolved (absolute) paths; page on the basename so
             # filenames stay short and do not leak the build machine layout.

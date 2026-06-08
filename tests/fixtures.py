@@ -279,11 +279,70 @@ def _build_m7_db(path: Path) -> None:
         con.close()
 
 
+def _build_multifile_db(path: Path) -> None:
+    """Populate ``path`` with one namespace spanning two files.
+
+    Models the real-world shape that ``group_by="file"`` must handle: a single
+    ``app`` namespace (recorded once, against ``alpha.hpp``) re-opened in a
+    second file ``beta.hpp`` that declares a class. ``app::Beta`` is therefore
+    *not* a global root and its parent namespace lives in another file, so the
+    file must still earn a page from its own declarations.
+    """
+    con = sqlite3.connect(path)
+    try:
+        con.executescript(_schema_ddl())
+        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', '1')")
+        con.execute("INSERT INTO files(id, path, sha256, size_bytes) VALUES(1, 'alpha.hpp', 'aa', 64)")
+        con.execute("INSERT INTO files(id, path, sha256, size_bytes) VALUES(2, 'beta.hpp', 'bb', 64)")
+
+        def sym(usr: str, parent: str, kind: int, spelling: str, qname: str, file_id: int) -> None:  # noqa: PLR0913
+            con.execute(
+                "INSERT INTO symbols(usr, parent_usr, kind, spelling, qualified_name, "
+                "display_name, signature, type_repr, access, is_definition, "
+                "is_documented, content_hash, file_id, line) "
+                "VALUES(?, ?, ?, ?, ?, ?, '', '', 0, 1, 1, ?, ?, 0)",
+                (usr, parent, kind, spelling, qname, qname, "hash-" + usr, file_id),
+            )
+
+        ns = "c:@N@app"
+        alpha = "c:@N@app@S@Alpha"
+        alpha_run = "c:@N@app@S@Alpha@F@run"
+        beta = "c:@N@app@S@Beta"
+        # The namespace is recorded once, against the file libclang saw first.
+        sym(ns, "", 1, "app", "app", 1)
+        sym(alpha, ns, 2, "Alpha", "app::Alpha", 1)
+        # A method of Alpha shares Alpha's file: it must render under Alpha, not
+        # as a separate top-of-file entry.
+        sym(alpha_run, alpha, 6, "run", "app::Alpha::run", 1)
+        sym(beta, ns, 2, "Beta", "app::Beta", 2)
+
+        for usr in (ns, alpha, alpha_run, beta):
+            con.execute(
+                "INSERT INTO comments(symbol_usr, raw_text, format, fields_json) VALUES(?, '/// fixture', 'doxygen', '')",
+                (usr,),
+            )
+            con.execute(
+                "INSERT INTO comment_fields(symbol_usr, name, arg, value, ordinal) VALUES(?, 'brief', '', ?, 0)",
+                (usr, f"Doc for {usr}."),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+
 @pytest.fixture
 def fixture_db(tmp_path: Path) -> Path:
     """Return the path to a freshly built fixture IR database."""
     path = tmp_path / "geo.sqlite"
     _build_fixture_db(path)
+    return path
+
+
+@pytest.fixture
+def multifile_db(tmp_path: Path) -> Path:
+    """Return an IR database with one namespace spanning two source files."""
+    path = tmp_path / "multifile.sqlite"
+    _build_multifile_db(path)
     return path
 
 
