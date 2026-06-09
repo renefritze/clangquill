@@ -79,6 +79,17 @@ Each run writes a timestamped pair into `benchmarks/results/` (gitignored):
 - `<ts>.md` — a readable table per repo (median wall-clock seconds) with the
   derived full-HTML / parse comparisons and cache speedups; also echoed to stdout.
 
+## Continuous benchmarking
+
+The `benchmark` GitHub Actions workflow (`.github/workflows/benchmark.yml`) runs
+on push to `main`, on a weekly schedule, and on manual dispatch. It installs the
+locked toolchain, runs the harness, appends the report to the job summary,
+uploads the raw results as an artifact, and then regenerates
+[`docs/benchmarks.md`](../docs/benchmarks.md) and opens a pull request against
+`main` with the refreshed numbers (so the published docs always show the latest
+results). A manual dispatch can widen `--repos`/`--tools` via the workflow
+inputs.
+
 ## Configs
 
 One TOML file per target in `configs/` (`clangquill`, `dune-gdt`, `abseil`,
