@@ -20,13 +20,13 @@ endif()
 # so the search ceiling tracks the pin without a second place to edit.
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../tools/ci/llvm-version.txt"
      _llvm_pin LIMIT_COUNT 1)
-string(REGEX MATCH "^[0-9]+" _llvm_major "${_llvm_pin}")
 # Fail clearly on a malformed/edited pin rather than with a cryptic foreach error.
-if(NOT _llvm_major)
+if(NOT _llvm_pin MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
   message(FATAL_ERROR
     "Invalid LLVM pin '${_llvm_pin}' in tools/ci/llvm-version.txt; "
     "expected MAJOR.MINOR.PATCH")
 endif()
+string(REGEX REPLACE "^([0-9]+)\\..*$" "\\1" _llvm_major "${_llvm_pin}")
 if(_llvm_major LESS 17)
   message(FATAL_ERROR
     "LLVM pin major ${_llvm_major} is below the supported floor (17)")
