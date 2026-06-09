@@ -13,7 +13,7 @@
 # Env:    LLVM_VERSION                     (defaults to the pinned version below)
 set -euo pipefail
 
-ver="${LLVM_VERSION:-22.1.0}"
+ver="${LLVM_VERSION:-22.1.7}"
 prefix="${1:-/opt/libclang}"
 
 if [ "$(uname -s)" != "Linux" ]; then

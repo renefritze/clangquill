@@ -54,7 +54,7 @@ jobs:
             chmod +x /opt/vcpkg-asset-fetch.sh &&
             cp {project}/tools/ci/fetch-libclang.sh /opt/fetch-libclang.sh &&
             chmod +x /opt/fetch-libclang.sh &&
-            LLVM_VERSION=22.1.0 /opt/fetch-libclang.sh /opt/libclang &&
+            LLVM_VERSION=22.1.7 /opt/fetch-libclang.sh /opt/libclang &&
             git clone https://github.com/microsoft/vcpkg /opt/vcpkg &&
             /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
            # cibuildwheel evaluates each CIBW_ENVIRONMENT value through
