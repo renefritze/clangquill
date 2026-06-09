@@ -49,3 +49,12 @@ if __name__ == "__main__":
             out.write(f"s;|{key}|;{l}{safe_key}{r};g\n")
 
 myst_substitutions = {safe_key: subst for _, safe_key, subst in jinja_subst}
+
+# The bundled-libclang pin (single source of truth in tools/ci/llvm-version.txt),
+# exposed to prose so docs never restate the number. Use {{ libclang_major }} /
+# {{ libclang_version }} in Markdown.
+from pathlib import Path  # noqa: E402
+
+_pin = (Path(__file__).resolve().parent.parent / "tools" / "ci" / "llvm-version.txt").read_text().strip()
+myst_substitutions["libclang_version"] = _pin
+myst_substitutions["libclang_major"] = _pin.split(".")[0]

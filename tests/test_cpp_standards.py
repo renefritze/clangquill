@@ -7,15 +7,17 @@ backend and skip where the linked libclang is too old.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
 from clangquill import _core
 from clangquill._libclang import libclang_major
 
-if TYPE_CHECKING:
-    from pathlib import Path
+# The project's target libclang major — the bundled-libclang pin (single source
+# of truth in tools/ci/llvm-version.txt). C++26 dogfooding is gated on it to
+# match docs/conf.py.
+PIN_MAJOR = int((Path(__file__).parents[1] / "tools" / "ci" / "llvm-version.txt").read_text().strip().split(".")[0])
 
 requires_libclang = pytest.mark.skipif(not _core.have_libclang(), reason="core built without libclang")
 
@@ -67,7 +69,7 @@ def test_gnu_extension_std_passes_through(tmp_path: Path) -> None:
 
 
 @requires_libclang
-@pytest.mark.skipif((libclang_major() or 0) < 22, reason="C++26 pack indexing needs clang >= 22")
+@pytest.mark.skipif((libclang_major() or 0) < PIN_MAJOR, reason="C++26 pack indexing needs the pinned clang")
 def test_parses_cpp26_pack_indexing(tmp_path: Path) -> None:
     result = _parse(tmp_path, CPP26_SRC, "c++26")
     assert result.symbol_count > 0

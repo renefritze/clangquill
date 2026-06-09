@@ -15,12 +15,38 @@ if(CLANGQUILL_WITH_LIBCLANG STREQUAL "OFF")
   return()
 endif()
 
+# Build versioned tool/library name lists from the bundled-libclang pin (the
+# single source of truth in tools/ci/llvm-version.txt) down to a supported floor,
+# so the search ceiling tracks the pin without a second place to edit.
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../tools/ci/llvm-version.txt"
+     _llvm_pin LIMIT_COUNT 1)
+# Fail clearly on a malformed/edited pin rather than with a cryptic foreach error.
+if(NOT _llvm_pin MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  message(FATAL_ERROR
+    "Invalid LLVM pin '${_llvm_pin}' in tools/ci/llvm-version.txt; "
+    "expected MAJOR.MINOR.PATCH")
+endif()
+string(REGEX REPLACE "^([0-9]+)\\..*$" "\\1" _llvm_major "${_llvm_pin}")
+if(_llvm_major LESS 17)
+  message(FATAL_ERROR
+    "LLVM pin major ${_llvm_major} is below the supported floor (17)")
+endif()
+# foreach(RANGE) only counts up, so collect ascending then reverse to newest-first.
+set(_llvm_config_versioned "")
+set(_llvm_lib_versioned "")
+foreach(_v RANGE 17 ${_llvm_major})
+  list(APPEND _llvm_config_versioned "llvm-config-${_v}")
+  list(APPEND _llvm_lib_versioned "clang-${_v}")
+endforeach()
+list(REVERSE _llvm_config_versioned)
+list(REVERSE _llvm_lib_versioned)
+# Unversioned names first (a system default wins), then versioned newest-first.
+set(_llvm_config_names llvm-config ${_llvm_config_versioned})
+set(_llvm_lib_names clang libclang ${_llvm_lib_versioned})
+
 # Allow an llvm-config to point us at the right prefix. Newer versions are
 # listed first so a recent toolchain wins (c++23/c++26 need a recent clang).
-find_program(LLVM_CONFIG_EXECUTABLE NAMES
-  llvm-config
-  llvm-config-22 llvm-config-21 llvm-config-20 llvm-config-19
-  llvm-config-18 llvm-config-17)
+find_program(LLVM_CONFIG_EXECUTABLE NAMES ${_llvm_config_names})
 if(LLVM_CONFIG_EXECUTABLE)
   execute_process(
     COMMAND "${LLVM_CONFIG_EXECUTABLE}" --includedir
@@ -40,8 +66,7 @@ find_path(
 
 find_library(
   LibClang_LIBRARY
-  NAMES clang libclang
-        clang-22 clang-21 clang-20 clang-19 clang-18 clang-17
+  NAMES ${_llvm_lib_names}
   HINTS ${LibClang_ROOT} ${_llvm_libdir}
   PATH_SUFFIXES lib lib64)
 

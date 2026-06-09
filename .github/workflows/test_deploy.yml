@@ -54,8 +54,9 @@ jobs:
             cp {project}/tools/ci/vcpkg-asset-fetch.sh /opt/vcpkg-asset-fetch.sh &&
             chmod +x /opt/vcpkg-asset-fetch.sh &&
             cp {project}/tools/ci/fetch-libclang.sh /opt/fetch-libclang.sh &&
+            cp {project}/tools/ci/llvm-version.txt /opt/llvm-version.txt &&
             chmod +x /opt/fetch-libclang.sh &&
-            LLVM_VERSION=22.1.7 /opt/fetch-libclang.sh /opt/libclang &&
+            /opt/fetch-libclang.sh /opt/libclang &&
             cp /opt/libclang/LICENSE.TXT {project}/LICENSE-LLVM.txt &&
             git clone https://github.com/microsoft/vcpkg /opt/vcpkg &&
             /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics

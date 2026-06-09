@@ -114,8 +114,9 @@ single-payload, no-monolithic-libLLVM vendoring benefit the ADR chose the PyPI
 wheel for, **and** a newer libclang that parses C++26.
 
 Realized decision: **bundle libclang from the official LLVM release tarball**
-(pinned `LLVM_VERSION`, currently **22.1.7**), fetched per-arch by
-`tools/ci/fetch-libclang.sh` (it also provides the `clang-c` headers, so no
+(the pin lives in `tools/ci/llvm-version.txt`, the single source of truth read by
+the fetch script, the wheel workflows, the freshness check and the docs/tests),
+fetched per-arch by `tools/ci/fetch-libclang.sh` (it also provides the `clang-c` headers, so no
 separate header vendoring is needed; the binary tarball ships no license file,
 so the script fetches `clang/LICENSE.TXT` from the matching source tag).
 `auditwheel repair`

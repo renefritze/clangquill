@@ -28,6 +28,12 @@ sys.path.insert(0, str(this_dir))
 
 import clangquill
 
+# The bundled-libclang pin (single source of truth in tools/ci/llvm-version.txt);
+# its major is both the toolchain-search ceiling and the C++26 dogfood threshold.
+LIBCLANG_PIN_MAJOR = int(
+    (root_dir / "tools" / "ci" / "llvm-version.txt").read_text().strip().split(".")[0]
+)
+
 # -- General configuration ---------------------------------------------
 
 # If your documentation needs a minimal Sphinx version, state it here.
@@ -94,7 +100,7 @@ def _llvm_includedir():
     major = libclang_major()
     if major:
         candidates.append(f"llvm-config-{major}")
-    candidates += ["llvm-config", *(f"llvm-config-{v}" for v in range(22, 16, -1))]
+    candidates += ["llvm-config", *(f"llvm-config-{v}" for v in range(LIBCLANG_PIN_MAJOR, 16, -1))]
     seen = set()
     for exe in candidates:
         if exe in seen:
@@ -126,7 +132,7 @@ clangquill_std = "c++20"
 # omitted and the build stays warning-free rather than failing.
 from clangquill._libclang import libclang_major  # noqa: E402
 
-if (libclang_major() or 0) >= 22:
+if (libclang_major() or 0) >= LIBCLANG_PIN_MAJOR:
     clangquill_std = "c++26"
     clangquill_input = [*clangquill_input, "examples/cpp23_features.hpp"]
 # this enables:
