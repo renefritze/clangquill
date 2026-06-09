@@ -20,12 +20,21 @@ on:
       warmup:
         description: Un-recorded warmup repetitions
         default: '1'
+# One benchmark run per ref at a time; a newer push cancels an in-flight run so
+# results are not interleaved and runners are not wasted.
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   benchmark:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.3
+        with:
+          # This job never pushes; don't leave the token in the checkout's git
+          # config for the benchmark harness's local git operations.
+          persist-credentials: false
       - name: Install build dependencies and doxygen
         run: |
           sudo apt-get update
@@ -46,12 +55,19 @@ jobs:
       - name: Run benchmark
         # `uv run` puts the project's venv bin on PATH, so the harness resolves
         # `clangquill` and `sphinx-build` by name; `doxygen` comes from apt.
+        # Dispatch inputs are passed via env (not interpolated into the script)
+        # so they can never expand into executable shell.
+        env:
+          BENCH_REPOS: ${{ inputs.repos || 'clangquill' }}
+          BENCH_TOOLS: ${{ inputs.tools || 'clangquill-myst,clangquill-sphinx,doxygen-xml,doxygen-html' }}
+          BENCH_REPEAT: ${{ inputs.repeat || '3' }}
+          BENCH_WARMUP: ${{ inputs.warmup || '1' }}
         run: |
           uv run python benchmarks/benchmark.py \
-            --repos "${{ inputs.repos || 'clangquill' }}" \
-            --tools "${{ inputs.tools || 'clangquill-myst,clangquill-sphinx,doxygen-xml,doxygen-html' }}" \
-            --repeat "${{ inputs.repeat || '3' }}" \
-            --warmup "${{ inputs.warmup || '1' }}"
+            --repos "$BENCH_REPOS" \
+            --tools "$BENCH_TOOLS" \
+            --repeat "$BENCH_REPEAT" \
+            --warmup "$BENCH_WARMUP"
       - name: Publish results to job summary
         if: always()
         run: |

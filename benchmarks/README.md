@@ -60,7 +60,7 @@ Key flags (see `--help` for all): `--repos`, `--tools`, `--scenarios`,
 
 ## Output
 
-Each run writes a timestamped pair into `results/` (gitignored):
+Each run writes a timestamped pair into `benchmarks/results/` (gitignored):
 
 - `<ts>.json` — full structured data: environment + tool/libclang versions,
   resolved git commit per repo, and per repo/stage/scenario samples (wall, CPU,

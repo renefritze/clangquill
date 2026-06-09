@@ -183,10 +183,21 @@ def measure(argv: list[str], cwd: Path, log_path: Path, env: dict | None = None)
         wall_s=wall,
         user_s=rusage.ru_utime,
         sys_s=rusage.ru_stime,
-        maxrss_kb=int(rusage.ru_maxrss),
+        maxrss_kb=_maxrss_kb(rusage.ru_maxrss),
         exit_code=exit_code,
         stdout=log_path.read_text(encoding="utf-8", errors="replace"),
     )
+
+
+def _maxrss_kb(ru_maxrss: int) -> int:
+    """Normalize ``rusage.ru_maxrss`` to kilobytes.
+
+    Linux reports the peak RSS in kilobytes, but macOS/BSD report it in bytes;
+    divide by 1024 there so the recorded figure is always KB.
+    """
+    if sys.platform == "darwin":
+        return int(ru_maxrss) // 1024
+    return int(ru_maxrss)
 
 
 # --------------------------------------------------------------------------- #
@@ -668,9 +679,9 @@ def _derived_lines(results: dict, repo: str, scenarios: list[str]) -> list[str]:
         dox_xml = _median(results, repo, "doxygen-xml", scenario)
         dox_html = _median(results, repo, "doxygen-html", scenario)
         bits: list[str] = []
-        if myst is not None and dox_xml is not None and dox_xml > 0:
+        if myst is not None and myst > 0 and dox_xml is not None and dox_xml > 0:
             bits.append(f"parse: clangquill-myst {myst:.3f}s vs doxygen-xml {dox_xml:.3f}s ({dox_xml / myst:.2f}× )")
-        if myst is not None and sphinx is not None:
+        if myst is not None and sphinx is not None and (myst + sphinx) > 0:
             full = myst + sphinx
             tail = ""
             if dox_html is not None and dox_html > 0:
