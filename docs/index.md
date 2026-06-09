@@ -9,6 +9,7 @@ installation
 usage
 guides/index
 cpp_api_index
+benchmarks
 contributing
 authors
 development/index

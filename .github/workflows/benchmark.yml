@@ -1,0 +1,130 @@
+---
+# Exercise the ClangQuill-vs-Doxygen benchmark harness and publish the results
+# into the docs. Runs on push to main, on a weekly schedule, and on manual
+# dispatch; each run regenerates docs/benchmarks.md and opens a pull request
+# against main with the refreshed numbers. By default it benchmarks only this
+# repository (fast, no network clones); a manual run can widen the scope.
+name: benchmark
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: 0 6 * * 1  # weekly, Monday 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: Comma-separated repo configs (e.g. clangquill,eigen,abseil,dune-gdt)
+        default: clangquill
+      tools:
+        description: Stages to run
+        default: clangquill-myst,clangquill-sphinx,doxygen-xml,doxygen-html
+      repeat:
+        description: Recorded repetitions per scenario
+        default: '3'
+      warmup:
+        description: Un-recorded warmup repetitions
+        default: '1'
+# One benchmark run per ref at a time; a newer push cancels an in-flight run so
+# results are not interleaved and runners are not wasted.
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    # Needed to push the docs-update branch and open the pull request.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          # The harness only does local git ops and create-pull-request uses its
+          # own token, so don't persist the checkout credentials.
+          persist-credentials: false
+      - name: Install doxygen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends doxygen
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
+        with:
+          python-version: '3.13'
+      - name: Install benchmark dependencies (clangquill binary wheel + sphinx + myst)
+        # benchmarks/ is a standalone uv project: clangquill comes from its
+        # published wheel (which bundles libclang), so there is no C++ build here.
+        run: uv sync --frozen --project benchmarks
+      - name: Run benchmark
+        # `uv run` puts the project's venv bin on PATH, so the harness resolves
+        # `clangquill` and `sphinx-build` by name; `doxygen` comes from apt.
+        # Dispatch inputs are passed via env (not interpolated into the script)
+        # so they can never expand into executable shell.
+        env:
+          BENCH_REPOS: ${{ inputs.repos || 'clangquill' }}
+          BENCH_TOOLS: ${{ inputs.tools || 'clangquill-myst,clangquill-sphinx,doxygen-xml,doxygen-html' }}
+          BENCH_REPEAT: ${{ inputs.repeat || '3' }}
+          BENCH_WARMUP: ${{ inputs.warmup || '1' }}
+        run: |
+          uv run --project benchmarks python benchmarks/benchmark.py \
+            --repos "$BENCH_REPOS" \
+            --tools "$BENCH_TOOLS" \
+            --repeat "$BENCH_REPEAT" \
+            --warmup "$BENCH_WARMUP"
+      - name: Publish results to job summary
+        if: always()
+        run: |
+          # The benchmark step may have failed before creating results/, so guard
+          # the directory before scanning it (this always() step must not fail).
+          if [ ! -d benchmarks/results ]; then
+            echo "No benchmark results were produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Result files are named with a sortable UTC timestamp, so the last
+          # one lexicographically is the newest. (find/sort avoids parsing `ls`.)
+          latest=$(find benchmarks/results -maxdepth 1 -name '*.md' | sort | tail -1)
+          if [ -n "$latest" ]; then
+            cat "$latest" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No benchmark results were produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: benchmark-results
+          path: benchmarks/results/
+          if-no-files-found: ignore
+      - name: Update docs benchmark page
+        # Only publish from main (push/schedule/default dispatch); a dispatch on a
+        # feature branch just runs the benchmark without touching the docs.
+        if: github.ref == 'refs/heads/main'
+        run: |
+          latest=$(find benchmarks/results -maxdepth 1 -name '*.md' | sort | tail -1)
+          if [ -z "$latest" ]; then
+            echo "No benchmark results to publish to docs." >&2
+            exit 0
+          fi
+          # Replace the page body with the freshly rendered report, keeping a
+          # stable "Benchmarks" title (drop the report's own top-level heading).
+          {
+            echo "<!-- AUTO-GENERATED by .github/workflows/benchmark.yml — do not edit by hand. -->"
+            echo
+            echo "# Benchmarks"
+            tail -n +2 "$latest"
+          } > docs/benchmarks.md
+      - name: Open docs update PR against main
+        if: github.ref == 'refs/heads/main'
+        uses: peter-evans/create-pull-request@84ae59a2cdc2258d6fa0732dd66352dddae2a412  # v7.0.9
+        with:
+          base: main
+          branch: bot/benchmark-results
+          add-paths: docs/benchmarks.md
+          commit-message: 'docs: refresh benchmark results'
+          title: 'docs: refresh benchmark results'
+          body: |
+            Automated benchmark run — regenerated `docs/benchmarks.md` from the
+            latest `benchmark` workflow run.
+          delete-branch: true

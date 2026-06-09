@@ -1,0 +1,13 @@
+# Eigen — header-only linear algebra library (hosted on GitLab).
+# Heavily templated; a great stress test for the libclang parser. Pinned to the
+# 3.4.0 release tag for reproducibility.
+name = "eigen"
+repo = "https://gitlab.com/libeigen/eigen.git"
+ref = "3.4.0"
+std = "c++17"
+include_dirs = ["."]
+inputs = ["Eigen/src/Core/*.h"]
+doxygen_input = ["Eigen/src/Core"]
+
+[patch]
+files = ["Eigen/src/Core/Matrix.h"]

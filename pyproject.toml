@@ -14,6 +14,14 @@ extend-ignore = ["E501", "ANN201", "ANN001", "D203", "D211", "D213"]
 # Standalone CI helper run via `python tools/ci/smoke_test.py` (not a package);
 # asserts + prints are intentional smoke-test output.
 "tools/ci/*.py" = ["INP001", "D100", "D103", "S101", "T201", "PTH118", "PTH123"]
+# Standalone benchmark driver run via `python benchmarks/benchmark.py` (not a
+# package): prints are its UI, it shells out to git/clangquill/doxygen, and the
+# orchestration functions are intentionally branchy. RUF001 allows the `×`/`·`
+# glyphs in the rendered report.
+"benchmarks/*.py" = [
+    "INP001", "D100", "D101", "D102", "D103", "T201", "S101", "S603", "S607",
+    "C901", "PLR0912", "PLR0913", "PLR0915", "FBT001", "FBT002", "RUF001", "BLE001",
+]
 
 [tool.pytest.ini_options]
 addopts = "--cov=clangquill --cov-report=term-missing"

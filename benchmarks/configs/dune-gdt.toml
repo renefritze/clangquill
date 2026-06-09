@@ -1,0 +1,16 @@
+# dune-gdt — a DUNE module for grid-based discretisation methods.
+# Pinned to a concrete commit on `main` (no upstream release tag is published)
+# so runs stay reproducible; bump it to re-baseline. Adjust `repo`/`ref` to
+# match your fork if needed. Like abseil, this depends on the wider DUNE stack,
+# so libclang will report unresolved includes; that is recorded as a real-world
+# data point.
+name = "dune-gdt"
+repo = "https://github.com/dune-gdt/dune-gdt.git"
+ref = "b51af5ba309da83a234174ca916df029f53e3d15" # main @ 2026-06-09
+std = "c++17"
+include_dirs = ["."]
+inputs = ["dune/gdt/*.hh"]
+doxygen_input = ["dune/gdt"]
+
+[patch]
+files = ["dune/gdt/operators/interfaces.hh"]
