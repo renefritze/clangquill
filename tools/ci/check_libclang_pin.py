@@ -1,7 +1,7 @@
 """Fail when a newer LLVM release than the pinned one ships both Linux arches.
 
-The pin lives in ``tools/ci/fetch-libclang.sh`` (``LLVM_VERSION`` default) and is
-mirrored by the wheel workflows. This is run on a schedule (see
+The pin lives in ``tools/ci/llvm-version.txt`` (the single source of truth that
+``fetch-libclang.sh`` and the wheel workflows read). This is run on a schedule (see
 ``.github/workflows/libclang-pin-check.yml``); network/API errors are treated as
 non-fatal so a transient blip never raises a false alarm. It only fails when a
 strictly newer stable release exists *and* ships both the X64 and ARM64 Linux
@@ -18,21 +18,20 @@ import urllib.request
 from pathlib import Path
 
 RELEASES_URL = "https://api.github.com/repos/llvm/llvm-project/releases?per_page=40"
-FETCH_SCRIPT = Path(__file__).parent / "fetch-libclang.sh"
+PIN_FILE = Path(__file__).parent / "llvm-version.txt"
 _STABLE_TAG = re.compile(r"^llvmorg-(\d+)\.(\d+)\.(\d+)$")
 
 
 def pinned_version() -> str:
     try:
-        text = FETCH_SCRIPT.read_text(encoding="utf-8")
+        ver = PIN_FILE.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
-        msg = f"could not find fetch-libclang.sh at {FETCH_SCRIPT}"
+        msg = f"could not find the pin file at {PIN_FILE}"
         raise SystemExit(msg) from None
-    match = re.search(r"LLVM_VERSION:-([0-9]+\.[0-9]+\.[0-9]+)", text)
-    if not match:
-        msg = "could not find pinned LLVM_VERSION in fetch-libclang.sh"
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", ver):
+        msg = f"unexpected LLVM pin {ver!r} in {PIN_FILE.name}; expected MAJOR.MINOR.PATCH"
         raise SystemExit(msg)
-    return match.group(1)
+    return ver
 
 
 def _ver_tuple(ver: str) -> tuple[int, int, int]:
@@ -101,8 +100,8 @@ def main() -> int:
     if _ver_tuple(latest) > _ver_tuple(pin):
         print(
             f"::error::A newer libclang ({latest}) ships both Linux arch tarballs. "
-            f"Bump LLVM_VERSION from {pin} to {latest} in tools/ci/fetch-libclang.sh "
-            f"and the wheel workflows (wheels.yml, deploy.yml, test_deploy.yml).",
+            f"Bump the pin from {pin} to {latest} in tools/ci/llvm-version.txt "
+            f"(the single source of truth; everything else reads it).",
         )
         return 1
 

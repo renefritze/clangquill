@@ -10,10 +10,13 @@
 # trade-off is a GLIBC_2.34 floor, so wheels build in a manylinux_2_34 image.
 #
 # Usage:  fetch-libclang.sh [PREFIX]      (PREFIX defaults to /opt/libclang)
-# Env:    LLVM_VERSION                     (defaults to the pinned version below)
+# Env:    LLVM_VERSION                     (defaults to the pinned version in the
+#                                           sibling llvm-version.txt — the single
+#                                           source of truth for the pin)
 set -euo pipefail
 
-ver="${LLVM_VERSION:-22.1.7}"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ver="${LLVM_VERSION:-$(cat "$here/llvm-version.txt")}"
 prefix="${1:-/opt/libclang}"
 
 if [ "$(uname -s)" != "Linux" ]; then
