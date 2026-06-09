@@ -1,0 +1,15 @@
+# Abseil — Google's large C++ common-libraries collection. Pinned to an LTS tag.
+# Dependency-heavy: without the full include tree libclang will emit diagnostics
+# and may extract fewer symbols than Doxygen's tolerant lexer. That asymmetry is
+# recorded (exit codes / symbol counts), not treated as a failure. Extend
+# `include_dirs` to recover more symbols if you have the deps available.
+name = "abseil"
+repo = "https://github.com/abseil/abseil-cpp.git"
+ref = "20240722.0"
+std = "c++17"
+include_dirs = ["."]
+inputs = ["absl/strings/*.h"]
+doxygen_input = ["absl/strings"]
+
+[patch]
+files = ["absl/strings/string_view.h"]

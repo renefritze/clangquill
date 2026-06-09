@@ -1,0 +1,71 @@
+---
+# Exercise the ClangQuill-vs-Doxygen benchmark harness. Runs on every push to the
+# benchmark PR branch and on manual dispatch. By default it benchmarks only this
+# repository (fast, no network clones); a manual run can widen the scope.
+name: benchmark
+on:
+  push:
+    branches: [claude/clangquill-doxygen-benchmarks-3uvv5d]
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: Comma-separated repo configs (e.g. clangquill,eigen,abseil,dune-gdt)
+        default: clangquill
+      tools:
+        description: Stages to run
+        default: clangquill-myst,clangquill-sphinx,doxygen-xml,doxygen-html
+      repeat:
+        description: Recorded repetitions per scenario
+        default: '3'
+      warmup:
+        description: Un-recorded warmup repetitions
+        default: '1'
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+      - name: Install build dependencies and doxygen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libclang-dev libsqlite3-dev nlohmann-json3-dev doxygen
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Build clangquill (with libclang) and docs deps
+        # The docs extra pulls in sphinx + myst (myst-nb), which the render stage
+        # needs; CLANGQUILL_WITH_LIBCLANG=ON exercises the real parser path.
+        env:
+          SKBUILD_CMAKE_DEFINE: CLANGQUILL_WITH_LIBCLANG=ON
+        run: uv sync --frozen --extra docs
+      - name: Run benchmark
+        # `uv run` puts the project's venv bin on PATH, so the harness resolves
+        # `clangquill` and `sphinx-build` by name; `doxygen` comes from apt.
+        run: |
+          uv run python benchmarks/benchmark.py \
+            --repos "${{ inputs.repos || 'clangquill' }}" \
+            --tools "${{ inputs.tools || 'clangquill-myst,clangquill-sphinx,doxygen-xml,doxygen-html' }}" \
+            --repeat "${{ inputs.repeat || '3' }}" \
+            --warmup "${{ inputs.warmup || '1' }}"
+      - name: Publish results to job summary
+        if: always()
+        run: |
+          latest=$(ls -t benchmarks/results/*.md 2>/dev/null | head -1 || true)
+          if [ -n "$latest" ]; then
+            cat "$latest" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No benchmark results were produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmarks/results/
+          if-no-files-found: ignore

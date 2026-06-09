@@ -114,3 +114,7 @@ src/clangquill/_version.py
 
 # LLVM license fetched at wheel-build time (see tools/ci/fetch-libclang.sh)
 /LICENSE-LLVM.txt
+
+# benchmark harness scratch + results
+benchmarks/.work/
+benchmarks/results/
