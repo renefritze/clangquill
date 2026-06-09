@@ -70,7 +70,8 @@ Every knob is a `clangquill_*` config value mirroring a field of
 `clangquill.config.Config` — including `clangquill_compile_commands`,
 `clangquill_template_dirs`, `clangquill_include_undocumented`,
 `clangquill_comment_parser` and `clangquill_group_by`. See the
-[configuration guide](docs/guides/configuration.md) for the full reference.
+[configuration guide](https://github.com/renefritze/clangquill/blob/main/docs/guides/configuration.md)
+for the full reference.
 
 ### Command line
 
@@ -124,8 +125,9 @@ same name overrides just that kind:
 Generator(store, template_dirs=["my_templates"]).generate("docs/api")
 ```
 
-See the [templates guide](docs/guides/templates.md) for the available templates
-and context variables.
+See the
+[templates guide](https://github.com/renefritze/clangquill/blob/main/docs/guides/templates.md)
+for the available templates and context variables.
 
 ## Building from source
 
@@ -144,15 +146,17 @@ enabled. Pass `-DCLANGQUILL_WITH_LIBCLANG=ON` to require it.
 
 ## Documentation
 
-- [Usage](docs/usage.md) — generator, Sphinx extension, CLI and incremental builds
-- [Installation](docs/installation.md)
-- [Configuration reference](docs/guides/configuration.md)
-- [Templates](docs/guides/templates.md)
-- [Comment parsers](docs/guides/comment-parsers.md)
+- [Usage](https://github.com/renefritze/clangquill/blob/main/docs/usage.md) — generator, Sphinx extension, CLI and incremental builds
+- [Installation](https://github.com/renefritze/clangquill/blob/main/docs/installation.md)
+- [Configuration reference](https://github.com/renefritze/clangquill/blob/main/docs/guides/configuration.md)
+- [Templates](https://github.com/renefritze/clangquill/blob/main/docs/guides/templates.md)
+- [Comment parsers](https://github.com/renefritze/clangquill/blob/main/docs/guides/comment-parsers.md)
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). In short:
+Contributions are welcome — see
+[CONTRIBUTING.md](https://github.com/renefritze/clangquill/blob/main/CONTRIBUTING.md).
+In short:
 
 ```console
 $ python3 -m pip install .[dev]
@@ -163,7 +167,8 @@ $ make cpp-test      # C++ (Catch2) unit tests
 
 ## License
 
-clangquill is released under the BSD 2-Clause License — see [LICENSE](LICENSE).
+clangquill is released under the BSD 2-Clause License — see
+[LICENSE](https://github.com/renefritze/clangquill/blob/main/LICENSE).
 The Linux wheels additionally bundle libclang, distributed under the
 Apache-2.0 WITH LLVM-exception license.
 
