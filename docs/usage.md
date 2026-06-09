@@ -33,7 +33,6 @@ same name overrides just that kind:
 Generator(store, template_dirs=["my_templates"]).generate("docs/api")
 ```
 
-
 ## Sphinx extension
 
 For the common case you do not need to call the parser and generator yourself:
@@ -82,7 +81,6 @@ Wrote 1 page(s) to /path/to/docs/api.
 Run `clangquill build --help` for the full set of options, which mirror the
 `clangquill_*` config values.
 
-
 ## Incremental builds
 
 Set `clangquill_cache_dir` to make rebuilds incremental. clangquill then keeps
@@ -104,7 +102,6 @@ Re-running an unchanged build therefore regenerates nothing, touching one header
 regenerates only the affected pages, and a removed symbol's page is cleaned up.
 Without a cache directory the build is stateless: it re-parses into a throwaway
 database and rewrites every page each time.
-
 
 ## Example notebooks statistics
 

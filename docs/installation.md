@@ -8,9 +8,9 @@
 
 To install clangquill, run this command in your terminal:
 
-```{code-block} console
+```{code-block} bash
 
-$ uv pip install clangquill
+uv pip install clangquill
 
 ```
 
@@ -40,25 +40,25 @@ The sources for clangquill can be downloaded from the [Github repo][github repo]
 
 You can either clone the public repository:
 
-```{code-block} console
+```{code-block} bash
 
-$ git clone https://github.com/renefritze/clangquill.git
+git clone https://github.com/renefritze/clangquill.git
 
 ```
 
 Or download the [tarball][tarball]:
 
-```{code-block} console
+```{code-block} bash
 
-$ curl -OJL https://github.com/renefritze/clangquill/tarball/main
+curl -OJL https://github.com/renefritze/clangquill/tarball/main
 
 ```
 
 Once you have a copy of the source, you can install it with:
 
-```{code-block} console
+```{code-block} bash
 
-$ uv pip install .
+uv pip install .
 
 ```
 
