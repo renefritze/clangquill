@@ -525,14 +525,17 @@ def run_stage(
             argv, cwd = doxy_cmd(mode)
             out_dir = ctx.doxygen_out(mode)
         cold = measure(argv, cwd, _stage_log(ctx, stage, "cold", rep))
+        cold_output = dir_stats(out_dir)
 
         # -- noop ----------------------------------------------------------- #
         if stage == "clangquill-sphinx":
             untimed(*myst_cmd(), tag=f"sphinx-noop-myst-{pass_idx}")
         noop = measure(argv, cwd, _stage_log(ctx, stage, "noop", rep)) if "noop" in scenarios else None
+        noop_output = dir_stats(out_dir) if noop is not None else None
 
         # -- incremental ---------------------------------------------------- #
         incr = None
+        incr_output = None
         if "incremental" in scenarios:
             patched = apply_patch(ctx)
             try:
@@ -540,18 +543,26 @@ def run_stage(
                     # Regenerate MyST so the render sees the change, then time render.
                     untimed(*myst_cmd(), tag=f"sphinx-incr-myst-{pass_idx}")
                 incr = measure(argv, cwd, _stage_log(ctx, stage, "incremental", rep))
+                incr_output = dir_stats(out_dir)
             finally:
                 revert_patch(ctx, patched)
 
         if not recording:
             continue
-        for scenario, m in (("cold", cold), ("noop", noop), ("incremental", incr)):
+        # Each scenario records the output snapshot taken right after it ran;
+        # a single shared snapshot would mislabel cold/noop with the patched
+        # incremental tree (the scenarios rebuild the same out_dir in turn).
+        for scenario, m, output in (
+            ("cold", cold, cold_output),
+            ("noop", noop, noop_output),
+            ("incremental", incr, incr_output),
+        ):
             if scenario not in scenarios or m is None:
                 continue
             sample = m.as_dict()
             if stage == "clangquill-myst":
                 sample["work"] = clangquill_work(m.stdout)
-            sample["output"] = dir_stats(out_dir)
+            sample["output"] = output
             results[scenario]["samples"].append(sample)
 
     for scenario in scenarios:
@@ -624,20 +635,16 @@ def environment_info(tools: Tools) -> dict:
 
 
 def available_stages(requested: list[str], tools: Tools) -> list[str]:
-    """Filter ``requested`` stages to known ones whose tool is installed.
+    """Filter ``requested`` (already-validated) stages to those whose tool is installed.
 
-    Unknown stage names are rejected here so a typo or a stray
-    ``workflow_dispatch`` input cannot reach :func:`run_stage` and crash on
-    ``stage.split("-", 1)`` or be silently misread as the doxygen-html path.
+    A stage whose backing tool is missing is skipped with a warning; unknown
+    stage names are rejected earlier in :func:`main` so they never reach here.
     """
     have_clangquill = shutil.which(tools.clangquill[0]) is not None
     have_sphinx = shutil.which(tools.sphinx[0]) is not None and _have_myst()
     have_doxygen = shutil.which(tools.doxygen[0]) is not None
     keep: list[str] = []
     for stage in requested:
-        if stage not in ALL_STAGES:
-            print(f"  skipping {stage!r}: unknown stage (expected one of {', '.join(ALL_STAGES)})", file=sys.stderr)
-            continue
         if stage == "clangquill-myst" and not have_clangquill:
             print(f"  skipping {stage}: '{tools.clangquill[0]}' not found", file=sys.stderr)
             continue
@@ -783,6 +790,12 @@ def main(argv: list[str] | None = None) -> int:
         doxygen=shlex.split(args.doxygen),
     )
     requested_stages = [s.strip() for s in args.tools.split(",") if s.strip()]
+    unknown = [s for s in requested_stages if s not in ALL_STAGES]
+    if unknown:
+        # A typo'd --tools value (easy to miss in a workflow_dispatch input) is a
+        # CLI error, not something to silently skip into a partial report.
+        print(f"Unknown stage(s): {', '.join(unknown)}. Valid stages: {', '.join(ALL_STAGES)}", file=sys.stderr)
+        return 2
     scenarios = [s.strip() for s in args.scenarios.split(",") if s.strip()]
     stages = available_stages(requested_stages, tools)
     if not stages:
