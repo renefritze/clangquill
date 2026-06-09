@@ -35,11 +35,12 @@ url="https://github.com/llvm/llvm-project/releases/download/llvmorg-${ver}/${tar
 
 mkdir -p "$prefix"
 echo "fetch-libclang: downloading ${url}" >&2
-# Extract only the shared library, the C API headers, and the license; the rest
-# of the release (clang/lld/etc.) is multiple GB unpacked and unused here.
+# Extract only the shared library and the C API headers; the rest of the
+# release (clang/lld/etc.) is multiple GB unpacked and unused here. The binary
+# tarball ships no license file, so it is fetched separately below.
 curl -fsSL --retry 3 --retry-delay 2 "$url" \
   | tar -xJ -C "$prefix" --strip-components=1 --wildcards --no-anchored \
-        '*/lib/libclang.so*' '*/include/clang-c/*' '*/LICENSE.TXT'
+        '*/lib/libclang.so*' '*/include/clang-c/*'
 
 # FindLibClang looks for a bare `libclang.so`; the release ships the versioned
 # names plus that symlink, but recreate it defensively if it is missing.
@@ -55,6 +56,16 @@ test -f "${prefix}/include/clang-c/Index.h" \
   || { echo "fetch-libclang: clang-c/Index.h missing" >&2; exit 1; }
 test -e "${prefix}/lib/libclang.so" \
   || { echo "fetch-libclang: libclang.so missing" >&2; exit 1; }
+
+# The binary release tarball ships no license file, so fetch clang's license
+# (Apache-2.0 WITH LLVM-exception) from the matching source tag — wheels that
+# bundle libclang.so must redistribute it. Pinned to the same version as the .so
+# so the shipped text always matches the bundled library.
+license_url="https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-${ver}/clang/LICENSE.TXT"
+echo "fetch-libclang: downloading ${license_url}" >&2
+curl -fsSL --retry 3 --retry-delay 2 "$license_url" -o "${prefix}/LICENSE.TXT"
+test -s "${prefix}/LICENSE.TXT" \
+  || { echo "fetch-libclang: LICENSE.TXT download failed" >&2; exit 1; }
 
 echo "fetch-libclang: installed libclang ${ver} (${arch}) to ${prefix}" >&2
 ls -l "${prefix}/lib/"libclang.so* >&2

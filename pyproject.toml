@@ -51,10 +51,12 @@ authors = [
 description = "Parse Doxygen-documented C++ with libclang and generate MyST Markdown API docs for Sphinx"
 readme = "README.md"
 # clangquill's own code is BSD-2-Clause; the manylinux wheels additionally
-# bundle libclang (Apache-2.0 WITH LLVM-exception), whose license text ships
-# alongside via license-files (see docs ADR-0001).
+# bundle libclang (Apache-2.0 WITH LLVM-exception). Its license text is not
+# tracked in git — the wheel build generates LICENSE-LLVM.txt from the fetched
+# LLVM release (see tools/ci/fetch-libclang.sh and docs ADR-0001). The glob
+# below ships it when present (wheels) and is a no-op otherwise (sdist/source).
 license = "BSD-2-Clause"
-license-files = ["LICENSE", "LICENSE-LLVM.txt"]
+license-files = ["LICENSE*"]
 dynamic = ["version"]
 classifiers = [
     "Programming Language :: Python :: 3 :: Only",

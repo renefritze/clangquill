@@ -111,3 +111,6 @@ ENV/
 
 # hatch-vcs generated version file
 src/clangquill/_version.py
+
+# LLVM license fetched at wheel-build time (see tools/ci/fetch-libclang.sh)
+/LICENSE-LLVM.txt
