@@ -41,6 +41,17 @@ def test_command_line_interface():
     assert "--output-dir" in _condense(build_help.output)
 
 
+def test_version_flag():
+    """``--version`` reports the package version and exits cleanly."""
+    runner = CliRunner()
+    result = runner.invoke(cli.app, ["--version"])
+    assert result.exit_code == 0
+    out = _condense(result.output)
+    assert f"clangquill{clangquill.__version__}" in out
+    # The libclang line is always emitted (linked version or the stub note).
+    assert "libclang" in out
+
+
 def test_build_requires_inputs():
     """Invoking ``build`` with no inputs fails with usage help."""
     runner = CliRunner()
