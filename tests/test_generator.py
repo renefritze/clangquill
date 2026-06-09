@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from clangquill.generator import Generator
-from clangquill.store import Reference, RefKind, Store, Symbol
+from clangquill.store import Reference, RefKind, SourceFile, Store, Symbol
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -141,6 +141,32 @@ def test_group_by_file_writes_one_page_per_file(gen: Generator, tmp_path: Path) 
     page = (out / "geo_hpp.md").read_text()
     assert page.startswith("# File `geo.hpp`")
     assert "geo::Circle" in page
+
+
+def test_relpath_filter_reroots_under_base(store: Store) -> None:
+    gen = Generator(store, path_base="/work/repo")
+    # A file under the base is shown relative, with forward slashes.
+    assert gen._relpath("/work/repo/src/foo.hpp") == "src/foo.hpp"  # noqa: SLF001
+    # The base directory itself collapses to ".".
+    assert gen._relpath("/work/repo") == "."  # noqa: SLF001
+    # A path outside the base keeps its absolute spelling (no ".." escape).
+    assert gen._relpath("/work/other/bar.hpp") == "/work/other/bar.hpp"  # noqa: SLF001
+
+
+def test_relpath_filter_is_identity_without_base(store: Store) -> None:
+    gen = Generator(store)
+    assert gen._relpath("/work/repo/src/foo.hpp") == "/work/repo/src/foo.hpp"  # noqa: SLF001
+
+
+def test_file_heading_reroots_with_path_base(store: Store) -> None:
+    # The IR stores absolute, build-machine paths; the bundled file.md.jinja runs
+    # them through the `relpath` filter, so a path_base re-roots the "File"
+    # heading to a stable, relative path with forward slashes.
+    absolute = SourceFile(id=99, path="/work/repo/include/geo.hpp", sha256="x", size_bytes=0)
+    gen = Generator(store, path_base="/work/repo")
+    rendered = gen.render_file(absolute)
+    assert rendered.startswith("# File `include/geo.hpp`")
+    assert "/work/repo" not in rendered
 
 
 def test_templates_override_by_kind(store: Store, tmp_path: Path) -> None:

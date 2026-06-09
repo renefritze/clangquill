@@ -34,6 +34,7 @@ The field-name-to-front-end mapping is mechanical:
 | `include_undocumented` | `clangquill_include_undocumented` | `True` | Emit pages/sections for symbols that carry no documentation comment. |
 | `comment_parser` | `clangquill_comment_parser` | `None` | Comment-parser override: a registered name or a dotted import path. See the [comment-parser guide](comment-parsers.md). |
 | `group_by` | `clangquill_group_by` | `"symbol"` | How to partition output pages: `"symbol"` (one page per top-level symbol) or `"file"` (one page per parsed source file). |
+| `path_base` | `clangquill_path_base` | `None` | Directory (resolved against the srcdir / CWD) that the file paths in generated "File" headings are shown relative to. `None` keeps the absolute paths libclang reports, which leak the build-machine layout; set e.g. the project root for stable, reproducible headings. Files outside the base keep their absolute path. |
 
 ## Toctree / root
 

@@ -15,6 +15,7 @@ builders, and the child/relation queries.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -147,7 +148,7 @@ class Generator:
     named like a bundled one (``class.md.jinja`` …) transparently replaces it.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         store: Store,
         *,
@@ -155,6 +156,7 @@ class Generator:
         templates: Mapping[str, str] | None = None,
         include_undocumented: bool = True,
         comment_parser: str | None = None,
+        path_base: str | Path | None = None,
     ) -> None:
         """Bind a store and build the Jinja environment with overrides first.
 
@@ -163,11 +165,14 @@ class Generator:
         to a replacement template stem. ``include_undocumented`` controls
         whether symbols lacking a documentation comment are emitted.
         ``comment_parser`` overrides the comment format (a registered name or a
-        dotted import path) for every symbol.
+        dotted import path) for every symbol. ``path_base`` is the directory
+        that rendered file paths are shown relative to; ``None`` leaves the
+        absolute paths libclang reports unchanged (see :meth:`_relpath`).
         """
         self.store = store
         self.include_undocumented = include_undocumented
         self.comment_parser = comment_parser
+        self._path_base = str(path_base) if path_base is not None else None
         self._template_overrides = {k.lower(): v for k, v in (templates or {}).items()}
         self._documented_descendant: dict[str, bool] = {}
         loaders: list[FileSystemLoader | PackageLoader] = []
@@ -196,6 +201,7 @@ class Generator:
         g["xref"] = self.xref
         g["render_comment"] = self.render_comment
         g["field_list"] = self.field_list
+        self.env.filters["relpath"] = self._relpath
 
     # -- relation / child queries (thin pass-throughs for templates) ----------
 
@@ -272,6 +278,24 @@ class Generator:
     def label(self, symbol: Symbol) -> str:
         """Return the human-readable kind label used in headings."""
         return _LABEL_FOR.get(symbol.kind, "Symbol")
+
+    def _relpath(self, path: str) -> str:
+        """Re-root an absolute file path under ``path_base`` for display.
+
+        Backs the ``relpath`` Jinja filter used by ``file.md.jinja`` to keep the
+        rendered "File" headings free of build-machine paths. With no
+        ``path_base`` configured, or when ``path`` lies outside the base (the
+        relative path would escape via ``..``), the path is returned unchanged.
+        """
+        if self._path_base is None:
+            return path
+        try:
+            rel = os.path.relpath(path, self._path_base)
+        except ValueError:  # different drives on Windows
+            return path
+        if rel == ".." or rel.startswith(".." + os.sep):
+            return path  # outside the base — keep it absolute
+        return rel.replace(os.sep, "/")
 
     def template_name(self, symbol: Symbol) -> str:
         """Return the ``{kind}.md.jinja`` template selected for ``symbol``.

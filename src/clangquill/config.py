@@ -72,6 +72,12 @@ class Config:
     comment_parser: str | None = None
     #: How to partition output pages: one of :data:`GROUP_BY_CHOICES`.
     group_by: str = "symbol"
+    #: Directory that rendered file paths are shown relative to, resolved
+    #: against the base directory (Sphinx srcdir / CWD). None keeps the absolute
+    #: paths libclang reports, which leak the build-machine layout; set e.g. the
+    #: project root to render stable, reproducible paths in the generated 'File'
+    #: headings. Files outside the base keep their absolute path.
+    path_base: str | None = None
 
     # -- toctree / root -------------------------------------------------------
     #: ``:maxdepth:`` of the generated root toctree.

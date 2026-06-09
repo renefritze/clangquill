@@ -159,6 +159,7 @@ def _make_generator(config: Config, base_dir: Path, store: Store) -> Generator:
         templates=config.templates,
         include_undocumented=config.include_undocumented,
         comment_parser=config.comment_parser,
+        path_base=str((base_dir / config.path_base).resolve()) if config.path_base else None,
     )
 
 

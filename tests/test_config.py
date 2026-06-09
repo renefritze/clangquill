@@ -12,6 +12,7 @@ def test_defaults_match_issue_contract():
     assert cfg.output_dir == "api"
     assert cfg.include_undocumented is True
     assert cfg.group_by == "symbol"
+    assert cfg.path_base is None
     assert cfg.std == "c++20"
     assert cfg.toctree_maxdepth == 2
     assert cfg.root_document == "index"
@@ -34,6 +35,7 @@ def test_config_fields_cover_every_documented_value():
         "clangquill_include_undocumented",
         "clangquill_comment_parser",
         "clangquill_group_by",
+        "clangquill_path_base",
         "clangquill_toctree_maxdepth",
         "clangquill_root_document",
     }
