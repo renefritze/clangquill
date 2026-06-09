@@ -21,6 +21,16 @@ endif()
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../tools/ci/llvm-version.txt"
      _llvm_pin LIMIT_COUNT 1)
 string(REGEX MATCH "^[0-9]+" _llvm_major "${_llvm_pin}")
+# Fail clearly on a malformed/edited pin rather than with a cryptic foreach error.
+if(NOT _llvm_major)
+  message(FATAL_ERROR
+    "Invalid LLVM pin '${_llvm_pin}' in tools/ci/llvm-version.txt; "
+    "expected MAJOR.MINOR.PATCH")
+endif()
+if(_llvm_major LESS 17)
+  message(FATAL_ERROR
+    "LLVM pin major ${_llvm_major} is below the supported floor (17)")
+endif()
 # foreach(RANGE) only counts up, so collect ascending then reverse to newest-first.
 set(_llvm_config_versioned "")
 set(_llvm_lib_versioned "")

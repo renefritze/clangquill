@@ -55,6 +55,6 @@ myst_substitutions = {safe_key: subst for _, safe_key, subst in jinja_subst}
 # {{ libclang_version }} in Markdown.
 from pathlib import Path  # noqa: E402
 
-_pin = (Path(__file__).resolve().parent / ".." / "tools" / "ci" / "llvm-version.txt").read_text().strip()
+_pin = (Path(__file__).resolve().parent.parent / "tools" / "ci" / "llvm-version.txt").read_text().strip()
 myst_substitutions["libclang_version"] = _pin
 myst_substitutions["libclang_major"] = _pin.split(".")[0]
