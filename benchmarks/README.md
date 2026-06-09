@@ -27,32 +27,42 @@ benchmark surfaces.
 
 ## Prerequisites
 
+`benchmarks/` is a self-contained [uv](https://docs.astral.sh/uv/) project
+(`pyproject.toml` + `uv.lock`). Its dependencies are the tools the harness
+*drives* — the **published `clangquill` binary wheel** (which bundles libclang,
+so there is no C++ build), plus `sphinx` and `myst-parser` for the render stage:
+
 ```bash
-pip install '.[docs]'      # installs sphinx + myst (via myst-nb) for the render stage
-pip install myst-parser    # the minimal Sphinx scaffold uses myst_parser directly
-# clangquill itself: from the repo root
-pip install .              # provides the `clangquill` console script
-# doxygen: from your package manager, e.g.
-sudo apt-get install doxygen
+# From the repo root: install the locked toolchain into benchmarks/.venv
+uv sync --frozen --project benchmarks
+# doxygen is a system package, not a Python dependency:
+sudo apt-get install doxygen   # or your platform's equivalent
 ```
 
-Any tool that is missing is **skipped with a warning** rather than failing the
-run, so you can benchmark a subset (e.g. only the ClangQuill stages).
+The harness itself (`benchmark.py`) is standard-library only. Any tool that is
+missing is **skipped with a warning** rather than failing the run, so you can
+benchmark a subset (e.g. only the ClangQuill stages).
 
 ## Usage
 
+Run through `uv` so the locked `clangquill`/`sphinx-build` are on `PATH`:
+
 ```bash
 # Full comparison across every config in configs/
-python benchmarks/benchmark.py
+uv run --project benchmarks python benchmarks/benchmark.py
 
 # Fast smoke test: this repo, parse stage only, one repetition
-python benchmarks/benchmark.py --repos clangquill --tools clangquill-myst \
-    --repeat 1 --warmup 0
+uv run --project benchmarks python benchmarks/benchmark.py \
+    --repos clangquill --tools clangquill-myst --repeat 1 --warmup 0
 
 # All four stages on one repo
-python benchmarks/benchmark.py --repos clangquill \
+uv run --project benchmarks python benchmarks/benchmark.py --repos clangquill \
     --tools clangquill-myst,clangquill-sphinx,doxygen-xml,doxygen-html
 ```
+
+(If you already have `clangquill`/`sphinx-build`/`doxygen` on `PATH`, you can
+drop the `uv run --project benchmarks` prefix and just run
+`python benchmarks/benchmark.py`.)
 
 Key flags (see `--help` for all): `--repos`, `--tools`, `--scenarios`,
 `--repeat`, `--warmup`, `--work-dir`, `--results-dir`, `--fresh-clone`, and

@@ -35,23 +35,20 @@ jobs:
           # This job never pushes; don't leave the token in the checkout's git
           # config for the benchmark harness's local git operations.
           persist-credentials: false
-      - name: Install build dependencies and doxygen
+      - name: Install doxygen
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libclang-dev libsqlite3-dev nlohmann-json3-dev doxygen
+          sudo apt-get install -y --no-install-recommends doxygen
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
         with:
           python-version: '3.13'
-      - name: Build clangquill (with libclang) and docs deps
-        # The docs extra pulls in sphinx + myst (myst-nb), which the render stage
-        # needs; CLANGQUILL_WITH_LIBCLANG=ON exercises the real parser path.
-        env:
-          SKBUILD_CMAKE_DEFINE: CLANGQUILL_WITH_LIBCLANG=ON
-        run: uv sync --frozen --extra docs
+      - name: Install benchmark dependencies (clangquill binary wheel + sphinx + myst)
+        # benchmarks/ is a standalone uv project: clangquill comes from its
+        # published wheel (which bundles libclang), so there is no C++ build here.
+        run: uv sync --frozen --project benchmarks
       - name: Run benchmark
         # `uv run` puts the project's venv bin on PATH, so the harness resolves
         # `clangquill` and `sphinx-build` by name; `doxygen` comes from apt.
@@ -63,7 +60,7 @@ jobs:
           BENCH_REPEAT: ${{ inputs.repeat || '3' }}
           BENCH_WARMUP: ${{ inputs.warmup || '1' }}
         run: |
-          uv run python benchmarks/benchmark.py \
+          uv run --project benchmarks python benchmarks/benchmark.py \
             --repos "$BENCH_REPOS" \
             --tools "$BENCH_TOOLS" \
             --repeat "$BENCH_REPEAT" \

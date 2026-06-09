@@ -1,0 +1,20 @@
+[project]
+name = "clangquill-benchmarks"
+version = "0.0.0"
+description = "Benchmark harness comparing ClangQuill against Doxygen across real C++ codebases."
+requires-python = ">=3.13"
+# The harness (benchmark.py) is standard-library only; these dependencies are the
+# tools it *drives*. clangquill is installed from its published binary wheel
+# (which bundles libclang on Linux), so no C++ toolchain or source build is
+# needed. sphinx + myst-parser back the render stage. doxygen is a system
+# package (apt), not a Python dependency.
+dependencies = [
+    "clangquill>=0.2",
+    "sphinx>=6",
+    "myst-parser>=2",
+]
+
+[tool.uv]
+# A virtual project: install the dependencies into the environment but do not
+# build/install this directory itself (benchmark.py is run by path).
+package = false
