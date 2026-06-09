@@ -169,6 +169,40 @@ def test_file_heading_reroots_with_path_base(store: Store) -> None:
     assert "/work/repo" not in rendered
 
 
+def test_store_file_roots_skips_same_file_parents(multifile_db: Path) -> None:
+    with Store.open(multifile_db) as store:
+        # alpha.hpp owns the namespace record, so the namespace is its file-root;
+        # the class and its method nest under it and are not file-roots.
+        alpha_roots = {s.qualified_name for s in store.file_roots(1)}
+        assert alpha_roots == {"app"}
+        # beta.hpp declares only a class whose parent namespace lives elsewhere,
+        # so the class is the file-root despite not being a global root.
+        beta_roots = {s.qualified_name for s in store.file_roots(2)}
+        assert beta_roots == {"app::Beta"}
+
+
+def test_group_by_file_pages_every_file_of_a_spanning_namespace(multifile_db: Path, tmp_path: Path) -> None:
+    # Regression: a namespace spanning two files used to leave every file but
+    # the namespace's recorded home without a page (only global roots counted),
+    # so whole subtrees vanished from the index. Each file must now get a page.
+    with Store.open(multifile_db) as store:
+        out = tmp_path / "api"
+        pages = Generator(store).generate(out, group_by="file")
+
+    assert pages == ["alpha_hpp", "beta_hpp"]
+    alpha = (out / "alpha_hpp.md").read_text()
+    beta = (out / "beta_hpp.md").read_text()
+    # Each file lists only the class it declares, even though both share the
+    # ``app`` namespace whose single record lives in alpha.hpp.
+    assert "app::Alpha" in alpha
+    assert "app::Beta" not in alpha
+    assert "app::Beta" in beta
+    assert "app::Alpha" not in beta
+    # A method shares its class's file, so it renders under the class rather
+    # than as a second top-of-file entry.
+    assert "app::Alpha::run" in alpha
+
+
 def test_templates_override_by_kind(store: Store, tmp_path: Path) -> None:
     user_dir = tmp_path / "templates"
     user_dir.mkdir()
