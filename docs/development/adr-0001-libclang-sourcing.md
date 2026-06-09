@@ -132,5 +132,10 @@ Consequences:
   `smoke_test` job installs the repaired wheel in a clean manylinux_2_34 image
   (no system LLVM, no `LD_LIBRARY_PATH`) and parses a header to prove the
   bundled libclang is self-sufficient.
-* The LLVM license ships in the wheel as `LICENSE-LLVM.txt` via
-  `project.license-files` (the project's own license stays BSD-2-Clause).
+* The LLVM license ships in the wheel as `LICENSE-LLVM.txt`. It is **not** tracked
+  in git: the wheel build copies the `LICENSE.TXT` already unpacked by
+  `tools/ci/fetch-libclang.sh` into the project root (in `CIBW_BEFORE_ALL`), so the
+  shipped license always matches the pinned `LLVM_VERSION`. `project.license-files`
+  uses the glob `["LICENSE*"]`, which picks the file up when present (wheels) and is
+  a no-op for sdists/source builds that bundle no libclang. The project's own license
+  stays BSD-2-Clause.
