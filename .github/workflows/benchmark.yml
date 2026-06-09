@@ -55,7 +55,9 @@ jobs:
       - name: Publish results to job summary
         if: always()
         run: |
-          latest=$(ls -t benchmarks/results/*.md 2>/dev/null | head -1 || true)
+          # Result files are named with a sortable UTC timestamp, so the last
+          # one lexicographically is the newest. (find/sort avoids parsing `ls`.)
+          latest=$(find benchmarks/results -maxdepth 1 -name '*.md' | sort | tail -1)
           if [ -n "$latest" ]; then
             cat "$latest" >> "$GITHUB_STEP_SUMMARY"
           else
