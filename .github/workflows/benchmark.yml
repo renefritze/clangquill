@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.3
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           # This job never pushes; don't leave the token in the checkout's git
           # config for the benchmark harness's local git operations.
@@ -41,9 +41,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libclang-dev libsqlite3-dev nlohmann-json3-dev doxygen
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
         with:
           python-version: '3.13'
       - name: Build clangquill (with libclang) and docs deps
@@ -81,7 +81,7 @@ jobs:
           fi
       - name: Upload results artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: benchmark-results
           path: benchmarks/results/

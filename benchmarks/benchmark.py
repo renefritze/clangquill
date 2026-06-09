@@ -113,6 +113,7 @@ class RepoConfig:
 
     @classmethod
     def from_toml(cls, path: Path) -> RepoConfig:
+        """Load a :class:`RepoConfig` from the TOML file at ``path``."""
         data = tomllib.loads(path.read_text(encoding="utf-8"))
         patch = data.get("patch", {}) or {}
         return cls(
@@ -145,6 +146,7 @@ class Measurement:
     stdout: str
 
     def as_dict(self) -> dict:
+        """Serialise the measurement to a JSON-friendly dict (RSS in MB)."""
         return {
             "wall_s": self.wall_s,
             "user_s": self.user_s,
@@ -204,6 +206,7 @@ def _maxrss_kb(ru_maxrss: int) -> int:
 # Small filesystem / git helpers
 # --------------------------------------------------------------------------- #
 def run_git(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
+    """Run ``git args`` in ``cwd``, capturing output as text."""
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -248,26 +251,31 @@ class RepoContext:
 
     @property
     def sphinx_src(self) -> Path:
+        """Sphinx source dir for the render stage (holds conf.py + index.md)."""
         return self.bench_dir / "sphinx_src"
 
     @property
     def myst_out(self) -> Path:
-        # clangquill MyST output, placed inside the Sphinx srcdir under api/.
+        """MyST output dir, placed inside the Sphinx srcdir under api/."""
         return self.sphinx_src / "api"
 
     @property
     def sphinx_out(self) -> Path:
+        """Sphinx HTML output dir (also holds the ``.doctrees`` cache)."""
         return self.bench_dir / "sphinx_out"
 
     @property
     def cache_dir(self) -> Path:
+        """Incremental clangquill ``--cache-dir`` for this target."""
         return self.bench_dir / "cache"
 
     def doxygen_out(self, mode: str) -> Path:
+        """Doxygen output dir for ``mode`` ("xml" or "html")."""
         return self.bench_dir / f"doxygen-{mode}"
 
     @property
     def logs(self) -> Path:
+        """Directory holding captured per-run stdout/stderr logs."""
         return self.bench_dir / "logs"
 
 
@@ -340,6 +348,7 @@ def reset_state(ctx: RepoContext) -> None:
 # Stage command builders
 # --------------------------------------------------------------------------- #
 def clangquill_build_argv(ctx: RepoContext, clangquill_cmd: list[str]) -> list[str]:
+    """Build the ``clangquill build`` argv (parse stage, with ``--cache-dir``)."""
     cfg = ctx.config
     argv = [*clangquill_cmd, "build", *cfg.inputs, "-o", str(ctx.myst_out), "--std", cfg.std]
     for inc in cfg.include_dirs:
@@ -372,6 +381,7 @@ def write_sphinx_scaffold(ctx: RepoContext) -> None:
 
 
 def sphinx_argv(ctx: RepoContext, sphinx_cmd: list[str]) -> list[str]:
+    """Build the ``sphinx-build`` argv for the render stage (quiet, single-job)."""
     # -q quiet, -j auto would parallelise; keep single-job for fair, stable timing.
     return [*sphinx_cmd, "-b", "html", "-q", str(ctx.sphinx_src), str(ctx.sphinx_out)]
 
@@ -410,6 +420,7 @@ def write_doxyfile(ctx: RepoContext, mode: str) -> Path:
 
 
 def doxygen_argv(doxygen_cmd: list[str], doxyfile: Path) -> list[str]:
+    """Build the ``doxygen`` argv that runs ``doxyfile``."""
     return [*doxygen_cmd, str(doxyfile)]
 
 
@@ -439,12 +450,15 @@ def clangquill_work(stdout: str) -> dict:
 # --------------------------------------------------------------------------- #
 @dataclass
 class Tools:
+    """Resolved command (argv prefix) for each external tool the harness drives."""
+
     clangquill: list[str]
     sphinx: list[str]
     doxygen: list[str]
 
 
 def _stage_log(ctx: RepoContext, stage: str, scenario: str, rep: int) -> Path:
+    """Path of the captured log for one ``(stage, scenario, rep)`` run."""
     return ctx.logs / f"{stage}.{scenario}.{rep}.log"
 
 
@@ -469,15 +483,19 @@ def run_stage(
     # the timed (argv, cwd) plus a work-metric extractor and the output dir to
     # size up afterwards.
     def myst_cmd() -> tuple[list[str], Path]:
+        """Return the timed command + cwd for the clangquill parse stage."""
         return clangquill_build_argv(ctx, tools.clangquill), ctx.source_dir
 
     def sphinx_cmd() -> tuple[list[str], Path]:
+        """Return the timed command + cwd for the Sphinx render stage."""
         return sphinx_argv(ctx, tools.sphinx), ctx.sphinx_src
 
     def doxy_cmd(mode: str) -> tuple[list[str], Path]:
+        """Return the timed command + cwd for the Doxygen ``mode`` stage."""
         return doxygen_argv(tools.doxygen, write_doxyfile(ctx, mode)), ctx.source_dir
 
     def untimed(argv: list[str], cwd: Path, tag: str) -> None:
+        """Run ``argv`` for its side effects (e.g. produce MyST), discarding timing."""
         measure(argv, cwd, ctx.logs / f"_prep.{tag}.log")
 
     results: dict = {sc: {"samples": []} for sc in scenarios}
@@ -554,6 +572,7 @@ def summarize(values: list[float]) -> dict:
 # Environment / tool metadata
 # --------------------------------------------------------------------------- #
 def tool_version(argv: list[str]) -> str:
+    """Return the first line of ``argv`` output (e.g. ``--version``), or ""."""
     try:
         out = subprocess.run(argv, capture_output=True, text=True, timeout=30, check=False)
         if out.returncode != 0:
@@ -565,6 +584,7 @@ def tool_version(argv: list[str]) -> str:
 
 
 def libclang_version() -> str:
+    """Return the linked libclang version string, or "" if unavailable."""
     try:
         from clangquill import _core  # noqa: PLC0415
 
@@ -574,6 +594,7 @@ def libclang_version() -> str:
 
 
 def total_ram_gb() -> float:
+    """Return total physical RAM in GB (0.0 if it cannot be determined)."""
     try:
         return round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9, 1)
     except (ValueError, OSError):
@@ -581,6 +602,7 @@ def total_ram_gb() -> float:
 
 
 def environment_info(tools: Tools) -> dict:
+    """Collect machine, Python and tool/toolchain versions for the report."""
     return {
         "timestamp": datetime.now(UTC).isoformat(),
         "platform": platform.platform(),
@@ -618,6 +640,7 @@ def available_stages(requested: list[str], tools: Tools) -> list[str]:
 
 
 def _have_myst() -> bool:
+    """Return whether the ``myst_parser`` Sphinx extension is importable."""
     import importlib.util  # noqa: PLC0415
 
     return importlib.util.find_spec("myst_parser") is not None
@@ -627,6 +650,7 @@ def _have_myst() -> bool:
 # Reporting
 # --------------------------------------------------------------------------- #
 def _median(results: dict, repo: str, stage: str, scenario: str) -> float | None:
+    """Return the median wall time for one result cell, or None if absent."""
     try:
         return results[repo][stage][scenario]["stats"]["median"]
     except (KeyError, TypeError):
@@ -634,10 +658,12 @@ def _median(results: dict, repo: str, stage: str, scenario: str) -> float | None
 
 
 def _fmt(value: float | None) -> str:
+    """Format a seconds value to 3 decimals, or an em dash when None."""
     return f"{value:.3f}" if value is not None else "—"
 
 
 def render_markdown(payload: dict) -> str:
+    """Render the results ``payload`` as a Markdown report."""
     env = payload["environment"]
     lines: list[str] = ["# ClangQuill vs Doxygen benchmark", ""]
     lines.append(f"- Generated: `{env['timestamp']}`")
@@ -672,6 +698,7 @@ def render_markdown(payload: dict) -> str:
 
 
 def _derived_lines(results: dict, repo: str, scenarios: list[str]) -> list[str]:
+    """Build the per-repo derived parse/full-HTML comparison and cache-speedup lines."""
     out: list[str] = []
     for scenario in scenarios:
         myst = _median(results, repo, "clangquill-myst", scenario)
@@ -705,6 +732,7 @@ def _derived_lines(results: dict, repo: str, scenarios: list[str]) -> list[str]:
 # Main
 # --------------------------------------------------------------------------- #
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the benchmark CLI arguments."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config-dir", type=Path, default=DEFAULT_CONFIG_DIR)
     p.add_argument("--repos", default="", help="Comma-separated repo names to run (default: all configs).")
@@ -723,6 +751,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def load_configs(config_dir: Path, repos: str) -> list[RepoConfig]:
+    """Load TOML configs from ``config_dir``, filtered to ``repos`` when given."""
     wanted = {r.strip() for r in repos.split(",") if r.strip()}
     configs: list[RepoConfig] = []
     for path in sorted(config_dir.glob("*.toml")):
@@ -734,6 +763,7 @@ def load_configs(config_dir: Path, repos: str) -> list[RepoConfig]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the benchmark CLI: drive every repo/stage and write the reports."""
     args = parse_args(argv)
     tools = Tools(
         clangquill=shlex.split(args.clangquill),
