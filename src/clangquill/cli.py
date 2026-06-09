@@ -13,6 +13,7 @@ from typing import Annotated
 
 import typer
 
+from clangquill import __version__, _core
 from clangquill.config import GROUP_BY_CHOICES, Config, ConfigError
 from clangquill.pipeline import build as run_pipeline
 
@@ -28,12 +29,43 @@ app = typer.Typer(
 )
 
 
+def _version_callback(value: bool) -> None:  # noqa: FBT001 - typer eager-option callback signature
+    """Print the clangquill and libclang versions, then exit (``--version``).
+
+    The package version comes from installed metadata (see
+    :data:`clangquill.__version__`); the libclang line mirrors what is baked into
+    the SQLite artifact, so a bug report can cite the exact backend. The package
+    version is on the first line so tools that scrape ``--version`` (the
+    benchmark harness records it this way) get a clean ``clangquill <ver>``.
+    """
+    if not value:
+        return
+    typer.echo(f"clangquill {__version__}")
+    if _core.have_libclang():
+        typer.echo(f"libclang: {_core.libclang_version()}")
+    else:
+        typer.echo("libclang: not linked (stub backend)")
+    raise typer.Exit
+
+
 @app.callback()
-def _root() -> None:
+def _root(
+    version: Annotated[  # noqa: FBT002 - typer renders this bool as an eager --version flag
+        bool,
+        typer.Option(
+            "--version",
+            "-V",
+            help="Show the clangquill and libclang versions and exit.",
+            is_eager=True,
+            callback=_version_callback,
+        ),
+    ] = False,
+) -> None:
     """clangquill: parse C++ and generate MyST Markdown API documentation.
 
-    A no-op callback so the single ``build`` command keeps its name as a
-    required subcommand instead of being collapsed into the root invocation.
+    A near-no-op callback so the single ``build`` command keeps its name as a
+    required subcommand instead of being collapsed into the root invocation; it
+    also hosts the eager ``--version`` option.
     """
 
 
