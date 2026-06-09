@@ -2,14 +2,68 @@
 
 # Benchmarks
 
-ClangQuill vs Doxygen performance, measured by the harness in
-[`benchmarks/`](https://github.com/renefritze/clangquill/tree/main/benchmarks).
-The parse (`clangquill build` → MyST, vs `doxygen` XML) and render
-(`sphinx-build` → HTML, vs `doxygen` HTML) stages are timed separately across
-cold / no-op / incremental scenarios.
+- Generated: `2026-06-09T20:36:57.094097+00:00`
+- Machine: Linux-6.17.0-1018-azure-x86_64-with-glibc2.39 · 4 CPU · 16.8 GB RAM
+- clangquill: `n/a` · libclang `clang version 22.1.7 (https://github.com/llvm/llvm-project a255c1ed36a1d06f79bd2633ba9f8d900153007c)`
+- doxygen: `1.9.8` · sphinx: `sphinx-build 9.1.0`
+- repeat=3 warmup=1 (median wall-clock seconds)
 
-These figures are regenerated and published automatically by the `benchmark`
-GitHub Actions workflow, which opens a pull request against `main` with the
-refreshed numbers.
+## abseil
+_ref: 20240722.0 · commit: `4447c7562e3b`_
 
-_No benchmark results have been published yet._
+| stage | cold | noop | incremental |
+| --- | --- | --- | --- |
+| clangquill-myst | 3.913 | 0.297 | 3.894 |
+| clangquill-sphinx | 1.939 | 1.865 | 1.884 |
+| doxygen-xml | 1.032 | 1.054 | 1.059 |
+| doxygen-html | 0.916 | 0.935 | 0.933 |
+
+- **cold** — parse: clangquill-myst 3.913s vs doxygen-xml 1.032s (0.26× ); full HTML: clangquill 5.852s vs doxygen-html 0.916s (0.16× )
+- **noop** — parse: clangquill-myst 0.297s vs doxygen-xml 1.054s (3.55× ); full HTML: clangquill 2.163s vs doxygen-html 0.935s (0.43× )
+- **incremental** — parse: clangquill-myst 3.894s vs doxygen-xml 1.059s (0.27× ); full HTML: clangquill 5.777s vs doxygen-html 0.933s (0.16× )
+- **clangquill cache** — cold→noop 13.2× faster, cold→incremental 1.0× faster
+
+## clangquill
+_ref: (local working tree) · commit: `9251b37a658c`_
+
+| stage | cold | noop | incremental |
+| --- | --- | --- | --- |
+| clangquill-myst | 2.613 | 0.229 | 2.613 |
+| clangquill-sphinx | 1.751 | 0.713 | 0.784 |
+| doxygen-xml | 0.105 | 0.110 | 0.110 |
+| doxygen-html | 0.136 | 0.146 | 0.142 |
+
+- **cold** — parse: clangquill-myst 2.613s vs doxygen-xml 0.105s (0.04× ); full HTML: clangquill 4.365s vs doxygen-html 0.136s (0.03× )
+- **noop** — parse: clangquill-myst 0.229s vs doxygen-xml 0.110s (0.48× ); full HTML: clangquill 0.942s vs doxygen-html 0.146s (0.16× )
+- **incremental** — parse: clangquill-myst 2.613s vs doxygen-xml 0.110s (0.04× ); full HTML: clangquill 3.397s vs doxygen-html 0.142s (0.04× )
+- **clangquill cache** — cold→noop 11.4× faster, cold→incremental 1.0× faster
+
+## dune-gdt
+_ref: b51af5ba309da83a234174ca916df029f53e3d15 · commit: `b51af5ba309d`_
+
+| stage | cold | noop | incremental |
+| --- | --- | --- | --- |
+| clangquill-myst | 1.995 | 0.224 | 2.051 |
+| clangquill-sphinx | 1.297 | 0.714 | 0.690 |
+| doxygen-xml | 17.897 | 17.817 | 17.872 |
+| doxygen-html | 17.969 | 17.819 | 17.814 |
+
+- **cold** — parse: clangquill-myst 1.995s vs doxygen-xml 17.897s (8.97× ); full HTML: clangquill 3.293s vs doxygen-html 17.969s (5.46× )
+- **noop** — parse: clangquill-myst 0.224s vs doxygen-xml 17.817s (79.58× ); full HTML: clangquill 0.938s vs doxygen-html 17.819s (19.01× )
+- **incremental** — parse: clangquill-myst 2.051s vs doxygen-xml 17.872s (8.71× ); full HTML: clangquill 2.741s vs doxygen-html 17.814s (6.50× )
+- **clangquill cache** — cold→noop 8.9× faster, cold→incremental 1.0× faster
+
+## eigen
+_ref: 3.4.0 · commit: `3147391d946b`_
+
+| stage | cold | noop | incremental |
+| --- | --- | --- | --- |
+| clangquill-myst | 0.878 | 0.492 | 0.866 |
+| clangquill-sphinx | 26.761 | 1.297 | 2.204 |
+| doxygen-xml | 6.829 | 6.936 | 6.894 |
+| doxygen-html | 7.432 | 7.644 | 7.542 |
+
+- **cold** — parse: clangquill-myst 0.878s vs doxygen-xml 6.829s (7.78× ); full HTML: clangquill 27.639s vs doxygen-html 7.432s (0.27× )
+- **noop** — parse: clangquill-myst 0.492s vs doxygen-xml 6.936s (14.09× ); full HTML: clangquill 1.789s vs doxygen-html 7.644s (4.27× )
+- **incremental** — parse: clangquill-myst 0.866s vs doxygen-xml 6.894s (7.96× ); full HTML: clangquill 3.070s vs doxygen-html 7.542s (2.46× )
+- **clangquill cache** — cold→noop 1.8× faster, cold→incremental 1.0× faster
