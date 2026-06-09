@@ -115,8 +115,10 @@ wheel for, **and** a newer libclang that parses C++26.
 
 Realized decision: **bundle libclang from the official LLVM release tarball**
 (pinned `LLVM_VERSION`, currently **22.1.7**), fetched per-arch by
-`tools/ci/fetch-libclang.sh` (it also provides the `clang-c` headers and
-`LICENSE.TXT`, so no separate header vendoring is needed). `auditwheel repair`
+`tools/ci/fetch-libclang.sh` (it also provides the `clang-c` headers, so no
+separate header vendoring is needed; the binary tarball ships no license file,
+so the script fetches `clang/LICENSE.TXT` from the matching source tag).
+`auditwheel repair`
 vendors that libclang.so (plus libstdc++/libgcc).
 
 Consequences:
@@ -133,8 +135,9 @@ Consequences:
   (no system LLVM, no `LD_LIBRARY_PATH`) and parses a header to prove the
   bundled libclang is self-sufficient.
 * The LLVM license ships in the wheel as `LICENSE-LLVM.txt`. It is **not** tracked
-  in git: the wheel build copies the `LICENSE.TXT` already unpacked by
-  `tools/ci/fetch-libclang.sh` into the project root (in `CIBW_BEFORE_ALL`), so the
+  in git: `tools/ci/fetch-libclang.sh` downloads `clang/LICENSE.TXT` from the
+  matching LLVM source tag (`llvmorg-<LLVM_VERSION>`) into the libclang prefix, and
+  the wheel build copies it into the project root (in `CIBW_BEFORE_ALL`), so the
   shipped license always matches the pinned `LLVM_VERSION`. `project.license-files`
   uses the glob `["LICENSE*"]`, which picks the file up when present (wheels) and is
   a no-op for sdists/source builds that bundle no libclang. The project's own license
