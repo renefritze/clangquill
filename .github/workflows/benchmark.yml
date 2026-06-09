@@ -2,8 +2,9 @@
 # Exercise the ClangQuill-vs-Doxygen benchmark harness and publish the results
 # into the docs. Runs on push to main, on a weekly schedule, and on manual
 # dispatch; each run regenerates docs/benchmarks.md and opens a pull request
-# against main with the refreshed numbers. By default it benchmarks only this
-# repository (fast, no network clones); a manual run can widen the scope.
+# against main with the refreshed numbers. By default it benchmarks every repo
+# configured under benchmarks/configs/ (the external ones are cloned blobless);
+# a manual run can narrow the scope via the `repos` input.
 name: benchmark
 on:
   push:
@@ -13,8 +14,8 @@ on:
   workflow_dispatch:
     inputs:
       repos:
-        description: Comma-separated repo configs (e.g. clangquill,eigen,abseil,dune-gdt)
-        default: clangquill
+        description: Comma-separated repo configs to narrow scope (empty = every config under benchmarks/configs/)
+        default: ''
       tools:
         description: Stages to run
         default: clangquill-myst,clangquill-sphinx,doxygen-xml,doxygen-html
@@ -63,7 +64,9 @@ jobs:
         # Dispatch inputs are passed via env (not interpolated into the script)
         # so they can never expand into executable shell.
         env:
-          BENCH_REPOS: ${{ inputs.repos || 'clangquill' }}
+          # Empty by default so the harness benchmarks every config under
+          # benchmarks/configs/; a dispatch can pass a subset to narrow scope.
+          BENCH_REPOS: ${{ inputs.repos }}
           BENCH_TOOLS: ${{ inputs.tools || 'clangquill-myst,clangquill-sphinx,doxygen-xml,doxygen-html' }}
           BENCH_REPEAT: ${{ inputs.repeat || '3' }}
           BENCH_WARMUP: ${{ inputs.warmup || '1' }}

@@ -87,8 +87,9 @@ locked toolchain, runs the harness, appends the report to the job summary,
 uploads the raw results as an artifact, and then regenerates
 [`docs/benchmarks.md`](../docs/benchmarks.md) and opens a pull request against
 `main` with the refreshed numbers (so the published docs always show the latest
-results). A manual dispatch can widen `--repos`/`--tools` via the workflow
-inputs.
+results). By default it benchmarks every config under `configs/` (the external
+repos are cloned blobless); a manual dispatch can narrow `--repos` or change
+`--tools` via the workflow inputs.
 
 ## Configs
 
