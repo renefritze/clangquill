@@ -50,8 +50,8 @@ Wire it through whichever front end you use:
 clangquill_comment_parser = "my_pkg.parsers:rst_parser"
 ```
 
-```console
-$ clangquill build include/geo.hpp --comment-parser my_pkg.parsers:rst_parser
+```bash
+clangquill build include/geo.hpp --comment-parser my_pkg.parsers:rst_parser
 ```
 
 ```python

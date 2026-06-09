@@ -1,0 +1,20 @@
+---
+# markdownlint-cli2 configuration.
+#
+# The docs are MyST Markdown (Sphinx), which uses fenced "directives"
+# (```{toctree}, ```{include}, ```{note}, ```{cpp:class} ...), roles, and
+# free-flowing prose/tables. Several stock markdownlint rules fight that
+# syntax, so they are disabled here. The rules that keep code blocks and
+# whitespace consistent — MD014 (no bare "$" prompts), MD040 (fenced code
+# language), MD031 (blanks around fences), etc. — stay on.
+config:
+  MD013: false  # line-length: prose and tables wrap freely
+  MD033: false  # inline HTML: used in MyST/Sphinx output
+  MD041: false  # first-line H1: MyST pages start with a directive
+  MD025: false  # single H1: pages legitimately use several
+  MD026: false  # trailing punctuation in headings (e.g. "Get Started!")
+  MD060: false  # table column style: MyST/Sphinx tables
+ignores:
+  - tests/**
+  - .github/**  # issue templates, not project docs (mirrors pre-commit)
+  - '**/node_modules/**'

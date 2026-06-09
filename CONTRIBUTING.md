@@ -55,38 +55,39 @@ Ready to contribute? Here's how to set up {}`clangquill` for local development.
 1. Fork the {}`clangquill` repo on GitHub.
 2. Clone your fork locally:
 
+   ```bash
+   git clone https://github.com/renefritze/clangquill
    ```
-   $ git clone https://github.com/renefritze/clangquill
-   ```
-3. Install your local copy into a virtualenv:
 
+3. Install your local copy with [uv](https://docs.astral.sh/uv/) (it creates and manages the virtualenv for you):
+
+   ```bash
+   cd clangquill/
+   uv sync --extra dev
    ```
-   $ cd clangquill/
-   $ python3 -m venv venv
-   $ source venv/bin/activate
-   $ python3 -m pip install .[dev]
-   ```
+
 4. Create a branch for local development:
 
-   ```
-   $ git checkout -b name-of-your-bugfix-or-feature
+   ```bash
+   git checkout -b name-of-your-bugfix-or-feature
    ```
 
    Now you can make your changes locally.
 5. Make sure you have pre-commit installed and activated:
 
-   ```
-   $ pre-commit install
-   $ pre-commit run --all-files
+   ```bash
+   uvx pre-commit install
+   uvx pre-commit run --all-files
    ```
 
 6. Commit your changes and push your branch to GitHub:
 
+   ```bash
+   git add .
+   git commit -m "Your detailed description of your changes."
+   git push origin name-of-your-bugfix-or-feature
    ```
-   $ git add .
-   $ git commit -m "Your detailed description of your changes."
-   $ git push origin name-of-your-bugfix-or-feature
-   ```
+
 7. Submit a pull request through the GitHub website.
 
 ## Pull Request Guidelines
@@ -103,8 +104,8 @@ Before you submit a pull request, check that it meets these guidelines:
 
 To run a subset of tests:
 
-```
-$ pytest tests.test_clangquill
+```bash
+uv run pytest tests.test_clangquill
 ```
 
 ## Deploying
