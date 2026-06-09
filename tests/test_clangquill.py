@@ -46,10 +46,13 @@ def test_version_flag():
     runner = CliRunner()
     result = runner.invoke(cli.app, ["--version"])
     assert result.exit_code == 0
-    out = _condense(result.output)
-    assert f"clangquill{clangquill.__version__}" in out
-    # The libclang line is always emitted (linked version or the stub note).
-    assert "libclang" in out
+    # Strip ANSI per line (not _condense, which collapses the line structure) so
+    # both emitted lines can be asserted exactly and a format regression fails.
+    lines = [stripped for raw in result.output.splitlines() if (stripped := _ANSI_RE.sub("", raw).strip())]
+    assert len(lines) == 2
+    assert lines[0] == f"clangquill {clangquill.__version__}"
+    # Either the linked libclang version or the stub-backend note.
+    assert lines[1].startswith("libclang: ")
 
 
 def test_build_requires_inputs():
