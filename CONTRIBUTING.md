@@ -58,13 +58,11 @@ Ready to contribute? Here's how to set up {}`clangquill` for local development.
    ```
    $ git clone https://github.com/renefritze/clangquill
    ```
-3. Install your local copy into a virtualenv:
+3. Install your local copy with [uv](https://docs.astral.sh/uv/) (it creates and manages the virtualenv for you):
 
    ```
    $ cd clangquill/
-   $ python3 -m venv venv
-   $ source venv/bin/activate
-   $ python3 -m pip install .[dev]
+   $ uv sync --extra dev
    ```
 4. Create a branch for local development:
 
@@ -76,8 +74,8 @@ Ready to contribute? Here's how to set up {}`clangquill` for local development.
 5. Make sure you have pre-commit installed and activated:
 
    ```
-   $ pre-commit install
-   $ pre-commit run --all-files
+   $ uvx pre-commit install
+   $ uvx pre-commit run --all-files
    ```
 
 6. Commit your changes and push your branch to GitHub:
@@ -104,7 +102,7 @@ Before you submit a pull request, check that it meets these guidelines:
 To run a subset of tests:
 
 ```
-$ pytest tests.test_clangquill
+$ uv run pytest tests.test_clangquill
 ```
 
 ## Deploying

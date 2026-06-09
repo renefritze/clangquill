@@ -10,13 +10,14 @@ To install clangquill, run this command in your terminal:
 
 ```{code-block} console
 
-$ pip install clangquill
+$ uv pip install clangquill
 
 ```
 
 This is the preferred method to install clangquill, as it will always install the most recent stable release.
+Plain `pip install clangquill` works just as well if you prefer.
 
-If you don't have [pip][pip] installed, this [Python installation guide][python installation guide] can guide
+If you don't have [uv][uv] installed, the [uv installation guide][uv installation guide] can guide
 you through the process.
 
 ```{note}
@@ -29,9 +30,9 @@ Linux distributions; on older systems, build from source against your own
 libclang instead.
 ```
 
-[pip]: https://pip.pypa.io
+[uv]: https://docs.astral.sh/uv/
 
-[python installation guide]: http://docs.python-guide.org/en/latest/starting/installation/
+[uv installation guide]: https://docs.astral.sh/uv/getting-started/installation/
 
 ## From sources
 
@@ -57,7 +58,7 @@ Once you have a copy of the source, you can install it with:
 
 ```{code-block} console
 
-$ pip install .
+$ uv pip install .
 
 ```
 

@@ -31,9 +31,13 @@ with inter-symbol links resolved through `{cpp:any}`.
 
 ## Installation
 
+clangquill is published on PyPI. Install it with [uv](https://docs.astral.sh/uv/):
+
 ```console
-$ pip install clangquill
+$ uv pip install clangquill
 ```
+
+(Plain `pip install clangquill` works too.)
 
 The Linux wheels bundle a self-contained **libclang 22** from the official LLVM
 release, so parsing works out of the box with no system LLVM required. That
@@ -136,8 +140,8 @@ for the available templates and context variables.
 [nanobind](https://nanobind.readthedocs.io/). A standard install builds it:
 
 ```console
-$ pip install .
-$ python -c "from clangquill import _core; print(_core.have_libclang())"
+$ uv pip install .
+$ uv run python -c "from clangquill import _core; print(_core.have_libclang())"
 ```
 
 The core optionally links **libclang**; when `libclang-dev` (or an LLVM prefix
@@ -159,8 +163,8 @@ Contributions are welcome — see
 In short:
 
 ```console
-$ python3 -m pip install .[dev]
-$ pre-commit install
+$ uv sync --extra dev
+$ uvx pre-commit install
 $ uv run pytest      # Python test suite
 $ make cpp-test      # C++ (Catch2) unit tests
 ```
