@@ -20,7 +20,6 @@ on:
       warmup:
         description: Un-recorded warmup repetitions
         default: '1'
-
 jobs:
   benchmark:
     runs-on: ubuntu-24.04
