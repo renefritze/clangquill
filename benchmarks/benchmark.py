@@ -301,6 +301,10 @@ def prepare_repo(cfg: RepoConfig, work_dir: Path, *, fresh_clone: bool) -> RepoC
         checkout = run_git(["checkout", "--force", cfg.ref], source, check=False)
         if checkout.returncode != 0:
             print(f"  WARNING: ref {cfg.ref!r} not found for {cfg.name}; using default branch", file=sys.stderr)
+            # Actually move HEAD to the remote default; a failed checkout leaves
+            # the worktree where it was, which on a reused clone could be a
+            # previously benchmarked ref and diverge from the recorded label.
+            run_git(["checkout", "--force", "origin/HEAD"], source, check=False)
             resolved_ref = "(default branch; pinned ref missing)"
     else:
         resolved_ref = "(default branch)"
@@ -620,12 +624,20 @@ def environment_info(tools: Tools) -> dict:
 
 
 def available_stages(requested: list[str], tools: Tools) -> list[str]:
-    """Filter ``requested`` stages down to those whose tool is installed."""
+    """Filter ``requested`` stages to known ones whose tool is installed.
+
+    Unknown stage names are rejected here so a typo or a stray
+    ``workflow_dispatch`` input cannot reach :func:`run_stage` and crash on
+    ``stage.split("-", 1)`` or be silently misread as the doxygen-html path.
+    """
     have_clangquill = shutil.which(tools.clangquill[0]) is not None
     have_sphinx = shutil.which(tools.sphinx[0]) is not None and _have_myst()
     have_doxygen = shutil.which(tools.doxygen[0]) is not None
     keep: list[str] = []
     for stage in requested:
+        if stage not in ALL_STAGES:
+            print(f"  skipping {stage!r}: unknown stage (expected one of {', '.join(ALL_STAGES)})", file=sys.stderr)
+            continue
         if stage == "clangquill-myst" and not have_clangquill:
             print(f"  skipping {stage}: '{tools.clangquill[0]}' not found", file=sys.stderr)
             continue

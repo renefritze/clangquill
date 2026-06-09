@@ -71,6 +71,12 @@ jobs:
       - name: Publish results to job summary
         if: always()
         run: |
+          # The benchmark step may have failed before creating results/, so guard
+          # the directory before scanning it (this always() step must not fail).
+          if [ ! -d benchmarks/results ]; then
+            echo "No benchmark results were produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           # Result files are named with a sortable UTC timestamp, so the last
           # one lexicographically is the newest. (find/sort avoids parsing `ls`.)
           latest=$(find benchmarks/results -maxdepth 1 -name '*.md' | sort | tail -1)
