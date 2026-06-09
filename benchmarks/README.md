@@ -82,14 +82,14 @@ Each run writes a timestamped pair into `benchmarks/results/` (gitignored):
 ## Continuous benchmarking
 
 The `benchmark` GitHub Actions workflow (`.github/workflows/benchmark.yml`) runs
-on push to `main`, on a weekly schedule, and on manual dispatch. It installs the
-locked toolchain, runs the harness, appends the report to the job summary,
-uploads the raw results as an artifact, and then regenerates
+on version tags (`v*`) and on manual dispatch. It installs the locked toolchain,
+runs the harness, appends the report to the job summary, uploads the raw results
+as an artifact, and — on a tagged run — regenerates
 [`docs/benchmarks.md`](../docs/benchmarks.md) and opens a pull request against
-`main` with the refreshed numbers (so the published docs always show the latest
-results). By default it benchmarks every config under `configs/` (the external
-repos are cloned blobless); a manual dispatch can narrow `--repos` or change
-`--tools` via the workflow inputs.
+`main` with the refreshed numbers (so the published docs track tagged releases).
+By default it benchmarks every config under `configs/` (the external repos are
+cloned blobless); a manual dispatch can narrow `--repos` or change `--tools` via
+the workflow inputs.
 
 ## Configs
 

@@ -1,20 +1,19 @@
 ---
 # Exercise the ClangQuill-vs-Doxygen benchmark harness and publish the results
-# into the docs. Runs on push to main, on a weekly schedule, and on manual
-# dispatch; each run regenerates docs/benchmarks.md and opens a pull request
-# against main with the refreshed numbers. By default it benchmarks every repo
-# configured under benchmarks/configs/ (the external ones are cloned blobless);
-# a manual run can narrow the scope via the `repos` input.
+# into the docs. Runs on version tags (`v*`) and on manual dispatch; a tagged
+# run regenerates docs/benchmarks.md and opens a pull request against main with
+# the refreshed numbers. By default it benchmarks every repo configured under
+# benchmarks/configs/ (the external ones are cloned blobless); a manual run can
+# narrow the scope via the `repos` input.
 name: benchmark
 on:
   push:
-    branches: [main]
-  schedule:
-    - cron: 0 6 * * 1  # weekly, Monday 06:00 UTC
+    tags: [v*]
   workflow_dispatch:
     inputs:
       repos:
-        description: Comma-separated repo configs to narrow scope (empty = every config under benchmarks/configs/)
+        description: Comma-separated repo configs to narrow scope (empty = every config
+          under benchmarks/configs/)
         default: ''
       tools:
         description: Stages to run
@@ -101,9 +100,9 @@ jobs:
           path: benchmarks/results/
           if-no-files-found: ignore
       - name: Update docs benchmark page
-        # Only publish from main (push/schedule/default dispatch); a dispatch on a
-        # feature branch just runs the benchmark without touching the docs.
-        if: github.ref == 'refs/heads/main'
+        # Only publish on a version tag; a manual dispatch just runs the
+        # benchmark without touching the docs.
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           latest=$(find benchmarks/results -maxdepth 1 -name '*.md' | sort | tail -1)
           if [ -z "$latest" ]; then
@@ -119,7 +118,7 @@ jobs:
             tail -n +2 "$latest"
           } > docs/benchmarks.md
       - name: Open docs update PR against main
-        if: github.ref == 'refs/heads/main'
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: peter-evans/create-pull-request@84ae59a2cdc2258d6fa0732dd66352dddae2a412  # v7.0.9
         with:
           base: main
