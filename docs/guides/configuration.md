@@ -22,7 +22,8 @@ The field-name-to-front-end mapping is mechanical:
 | `std` | `clangquill_std` | `"c++20"` | C++ standard, passed verbatim as `-std=<std>` (see note). |
 | `defines` | `clangquill_defines` | `[]` | `-D` preprocessor definitions (`NAME` or `NAME=value`). |
 | `clang_resource_dir` | `clangquill_clang_resource_dir` | `None` | Clang resource directory (`-resource-dir`); `None` lets clang decide. |
-| `jobs` | `clangquill_jobs` | `0` | Number of threads used to parse translation units concurrently (each input header is an independent TU). `0` auto-detects the CPU count; `1` forces a serial parse. Has no effect on the generated output. |
+| `jobs` | `clangquill_jobs` | `0` | Number of threads used to parse translation units concurrently. `0` auto-detects the CPU count; `1` forces a serial parse. Has no effect on the generated output. |
+| `tu_batch` | `clangquill_tu_batch` | `0` | Number of input files grouped into one libclang translation unit. Grouping amortises the dominant parse cost — re-parsing the shared `#include` closure — across the batch, which makes cold builds several times faster. `0` picks a sensible batch size; `1` parses every input as its own fully isolated translation unit. Forced to `1` when `compile_commands` is set (per-file flags cannot share a unit). For self-contained headers the extracted IR is identical either way; headers that are *not* self-contained (e.g. designed to be included only through an umbrella header) see the preprocessor state of earlier files in their batch, which usually parses them *more* faithfully — set `1` if you need exact per-file isolation. |
 
 ## Output
 

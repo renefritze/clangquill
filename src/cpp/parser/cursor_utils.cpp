@@ -254,20 +254,26 @@ model::StorageKind map_storage(CXCursor c) {
 }
 
 bool in_file(CXCursor c, const std::string& main_file) {
+  std::unordered_set<std::string> mains;
+  if (!main_file.empty()) mains.insert(main_file);
+  return in_file(c, mains, /*trust_main_file=*/true);
+}
+
+bool in_file(CXCursor c, const std::unordered_set<std::string>& main_files,
+             bool trust_main_file) {
   CXSourceLocation loc = clang_getCursorLocation(c);
   if (clang_Location_isInSystemHeader(loc)) return false;
   // Primary check: entities declared in the TU's main file. Robust against path
-  // spelling differences (relative vs absolute).
-  if (clang_Location_isFromMainFile(loc)) return true;
-  // Fallback: explicit path match for entities pulled from a sibling header
-  // that the caller still wants documented.
-  if (main_file.empty()) return false;
+  // spelling differences (relative vs absolute). Skipped for umbrella TUs,
+  // whose synthetic main file contains nothing user-visible.
+  if (trust_main_file && clang_Location_isFromMainFile(loc)) return true;
+  // Explicit path match for entities in one of the accepted files.
+  if (main_files.empty()) return false;
   CXFile file;
   unsigned line = 0, column = 0, offset = 0;
   clang_getFileLocation(loc, &file, &line, &column, &offset);
   if (file == nullptr) return false;
-  std::string path = to_string(clang_getFileName(file));
-  return path == main_file;
+  return main_files.count(to_string(clang_getFileName(file))) > 0;
 }
 
 }  // namespace clangquill::parser

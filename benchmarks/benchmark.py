@@ -18,9 +18,11 @@ For every ``(repo, stage)`` pair three *scenarios* are measured, each repeated
 
 ClangQuill's incremental cache (only active with ``--cache-dir``) makes the
 ``noop`` scenario cheap (the parse is skipped entirely); ``incremental``
-currently re-parses the whole module but rewrites only the changed pages.
-Doxygen has no parse cache and re-parses every run, which is exactly the
-contrast the benchmark surfaces.
+re-parses only the translation units whose include closure contains the patched
+file and rewrites only the changed pages. Note the configured patch targets are
+widely-included headers, so the stale set can legitimately approach the whole
+module. Doxygen has no parse cache and re-parses every run, which is exactly
+the contrast the benchmark surfaces.
 
 Design notes / benchmarking practices baked in:
 

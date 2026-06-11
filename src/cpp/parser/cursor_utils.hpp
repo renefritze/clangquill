@@ -3,6 +3,7 @@
 #include <clang-c/Index.h>
 
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "model/symbol.hpp"
@@ -123,5 +124,14 @@ model::StorageKind map_storage(CXCursor c);
 /// @param main_file The main file path to compare against.
 /// @return `true` when @p c is declared in @p main_file.
 bool in_file(CXCursor c, const std::string& main_file);
+
+/// @brief Tests whether a cursor's location is in one of the given files.
+/// @param c The cursor to test.
+/// @param main_files Accepted file path spellings.
+/// @param trust_main_file Whether the TU's main file is accepted regardless of
+///        path spelling (`false` for synthetic umbrella main files).
+/// @return `true` when @p c is declared in one of @p main_files.
+bool in_file(CXCursor c, const std::unordered_set<std::string>& main_files,
+             bool trust_main_file);
 
 }  // namespace clangquill::parser

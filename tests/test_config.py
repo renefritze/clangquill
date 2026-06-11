@@ -17,6 +17,7 @@ def test_defaults_match_issue_contract():
     assert cfg.toctree_maxdepth == 2
     assert cfg.root_document == "index"
     assert cfg.jobs == 0
+    assert cfg.tu_batch == 0
 
 
 def test_config_fields_cover_every_documented_value():
@@ -30,6 +31,7 @@ def test_config_fields_cover_every_documented_value():
         "clangquill_defines",
         "clangquill_clang_resource_dir",
         "clangquill_jobs",
+        "clangquill_tu_batch",
         "clangquill_output_dir",
         "clangquill_template_dirs",
         "clangquill_templates",
@@ -85,6 +87,16 @@ def test_validate_rejects_negative_jobs():
 @pytest.mark.parametrize("jobs", [0, 1, 8])
 def test_validate_accepts_non_negative_jobs(jobs: int):
     assert Config(input=["a.hpp"], jobs=jobs).validate().jobs == jobs
+
+
+def test_validate_rejects_negative_tu_batch():
+    with pytest.raises(ConfigError, match="tu_batch"):
+        Config(input=["a.hpp"], tu_batch=-1).validate()
+
+
+@pytest.mark.parametrize("tu_batch", [0, 1, 32])
+def test_validate_accepts_non_negative_tu_batch(tu_batch: int):
+    assert Config(input=["a.hpp"], tu_batch=tu_batch).validate().tu_batch == tu_batch
 
 
 def test_validate_returns_self():

@@ -206,6 +206,55 @@ TEST_CASE("parse_files is deterministic regardless of job count", "[parser]") {
   CHECK(pa == pb);
 }
 
+TEST_CASE("umbrella batching extracts the same symbols as per-file parsing",
+          "[parser]") {
+  auto inputs = all_inputs();
+
+  parser::ParseOptions isolated;
+  isolated.tu_batch = 1;
+  parser::ParseOptions batched;
+  batched.tu_batch = static_cast<int>(inputs.size());
+
+  auto a = parser::parse_files(inputs, isolated);
+  auto b = parser::parse_files(inputs, batched);
+
+  CHECK(symbol_usrs(a) == symbol_usrs(b));
+
+  std::set<std::string> fa;
+  std::set<std::string> fb;
+  for (const auto& f : a.files) fa.insert(f.path);
+  for (const auto& f : b.files) fb.insert(f.path);
+  CHECK(fa == fb);
+}
+
+TEST_CASE("umbrella batching attributes dependencies per member exactly",
+          "[parser]") {
+  // m7.hpp is self-contained while shapes.hpp has no includes: inside one
+  // umbrella TU each member's dependency closure must stay its own (built from
+  // the preprocessing record, so even guard-skipped includes attribute).
+  const std::string dir = CLANGQUILL_FIXTURE_DIR;
+  std::vector<std::string> inputs{dir + "/shapes.hpp", dir + "/enums.hpp"};
+
+  parser::ParseOptions batched;
+  batched.tu_batch = 2;
+  std::vector<std::vector<std::string>> tu_files;
+  std::vector<bool> tu_ok;
+  parser::parse_files(inputs, batched, &tu_files, &tu_ok);
+
+  REQUIRE(tu_files.size() == 2);
+  REQUIRE(tu_ok == std::vector<bool>{true, true});
+  // Each member's closure starts with (a spelling of) itself and never lists
+  // the sibling input.
+  for (std::size_t i = 0; i < inputs.size(); ++i) {
+    REQUIRE_FALSE(tu_files[i].empty());
+    CHECK(tu_files[i].front().find(i == 0 ? "shapes.hpp" : "enums.hpp") !=
+          std::string::npos);
+    for (const auto& dep : tu_files[i]) {
+      CHECK(dep.find(i == 0 ? "enums.hpp" : "shapes.hpp") == std::string::npos);
+    }
+  }
+}
+
 #else  // !CLANGQUILL_HAVE_LIBCLANG
 
 TEST_CASE("parser tests skipped without libclang", "[parser][!mayfail]") {

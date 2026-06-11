@@ -123,6 +123,7 @@ def _parse_options(config: Config, base_dir: Path) -> _core.ParseOptions:
         extra.append(f"-resource-dir={Path(config.clang_resource_dir).expanduser()}")
     opt.extra_args = extra
     opt.jobs = config.jobs
+    opt.tu_batch = config.tu_batch
     if config.compile_commands:
         opt.compile_commands_dir = str((base_dir / config.compile_commands).resolve())
     return opt
@@ -153,6 +154,7 @@ def _parse_fingerprint(config: Config, base_dir: Path, inputs: list[str]) -> str
             "include_dirs": [str((base_dir / d).resolve()) for d in config.include_dirs],
             "defines": list(config.defines),
             "compile_args": list(config.compile_args),
+            "tu_batch": config.tu_batch,
             "clang_resource_dir": config.clang_resource_dir or "",
             "compile_commands": compile_commands_hash,
             "core_version": getattr(_core, "__core_version__", ""),
@@ -430,13 +432,12 @@ def _parse_tus_into(
     ir_path: Path,
     options: _core.ParseOptions,
 ) -> tuple[dict[str, list[str]], list[str]]:
-    """Re-parse each stale input, replacing only its rows, atomically.
+    """Re-parse the stale inputs, replacing only their rows, atomically.
 
-    Each per-TU writer call replaces just one translation unit's rows (reusing
-    every other TU's), but the set of stale inputs must land all-or-nothing: if a
-    later TU failed after an earlier one was committed, the IR would be
-    half-updated while the cache still describes the old state. So the re-parses
-    run against a staged copy of ``ir_path`` that replaces the original only once
+    One batched writer call re-parses every stale translation unit (in parallel,
+    like a full parse) and replaces just those units' rows, reusing every other
+    TU's. The set of stale inputs must land all-or-nothing: the re-parse runs
+    against a staged copy of ``ir_path`` that replaces the original only once
     every stale input has succeeded; on any failure the original IR (and the
     cache, which is only updated afterwards) is left untouched, forcing a clean
     rebuild next run. Returns the fresh dependency map and the diagnostics.
@@ -444,17 +445,12 @@ def _parse_tus_into(
     staged = _new_temp_db(ir_path.parent)
     try:
         shutil.copyfile(ir_path, staged)
-        deps: dict[str, list[str]] = {}
-        diagnostics: list[str] = []
-        for inp in stale:
-            result = _core.parse_tu_to_sqlite(inp, str(staged), options)
-            deps.update(_tu_deps(result))
-            diagnostics.extend(result.diagnostics)
+        result = _core.parse_tus_to_sqlite(stale, str(staged), options)
     except BaseException:
         staged.unlink(missing_ok=True)
         raise
     staged.replace(ir_path)
-    return deps, diagnostics
+    return _tu_deps(result), list(result.diagnostics)
 
 
 def _apply_outputs(

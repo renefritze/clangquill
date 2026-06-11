@@ -5,10 +5,12 @@
 #include <algorithm>
 #include <atomic>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -22,6 +24,11 @@ namespace {
 
 CXIndex as_index(void* p) { return static_cast<CXIndex>(p); }
 
+// Inputs grouped per umbrella translation unit when ParseOptions::tu_batch is
+// 0 (auto). Fixed — independent of the job count — so the batch composition,
+// and with it the extracted IR, is identical no matter how many threads run.
+constexpr std::size_t kDefaultTuBatch = 16;
+
 // RAII guard so the translation unit is disposed on every exit path,
 // including exceptions thrown while collecting diagnostics or visiting.
 struct TuGuard {
@@ -31,12 +38,12 @@ struct TuGuard {
   }
 };
 
-// Reads a file and appends a SourceFile row (path, sha256, size) if not already
-// present in the module.
-void record_file(const std::string& path, model::ParsedModule& out) {
-  for (const auto& f : out.files) {
-    if (f.path == path) return;
-  }
+// Reads a file and appends a SourceFile row (path, sha256, size). `seen` keys
+// the rows already present in the module so a file shared by many inclusions
+// is read and hashed once.
+void record_file(const std::string& path, model::ParsedModule& out,
+                 std::unordered_set<std::string>& seen) {
+  if (!seen.insert(path).second) return;
   std::ifstream in(path, std::ios::binary);
   if (!in) return;
   std::ostringstream ss;
@@ -50,12 +57,24 @@ void record_file(const std::string& path, model::ParsedModule& out) {
   out.files.push_back(std::move(file));
 }
 
-// Threaded through the inclusion visitor: the module the file rows land in, plus
-// an optional per-TU sink so a dependency can be attributed to the input TU that
-// pulled it in (used by the per-TU incremental re-parse path).
+// Seeds the dedup set from rows already in the module, so repeated parse calls
+// against the same module never duplicate file rows.
+std::unordered_set<std::string> seen_from(const model::ParsedModule& out) {
+  std::unordered_set<std::string> seen;
+  seen.reserve(out.files.size());
+  for (const auto& f : out.files) seen.insert(f.path);
+  return seen;
+}
+
+// Threaded through the inclusion visitor: the module the file rows land in, the
+// dedup set for those rows, an optional per-TU sink so a dependency can be
+// attributed to the input TU that pulled it in (single-file TUs only), and the
+// synthetic umbrella path to skip in batch mode.
 struct InclusionCtx {
   model::ParsedModule* out;
+  std::unordered_set<std::string>* seen;
   std::vector<std::string>* tu_files;  // may be null
+  const std::string* skip_path;        // may be null
 };
 
 // Appends `path` to a per-TU file list, skipping duplicates so a header included
@@ -76,11 +95,69 @@ void record_inclusion(CXFile included_file, CXSourceLocation* /*stack*/,
   auto& ctx = *static_cast<InclusionCtx*>(data);
   CXString name = clang_getFileName(included_file);
   const char* cstr = clang_getCString(name);
-  if (cstr != nullptr && cstr[0] != '\0') {
-    record_file(cstr, *ctx.out);
+  if (cstr != nullptr && cstr[0] != '\0' &&
+      (ctx.skip_path == nullptr || *ctx.skip_path != cstr)) {
+    record_file(cstr, *ctx.out, *ctx.seen);
     note_tu_file(ctx.tu_files, cstr);
   }
   clang_disposeString(name);
+}
+
+// Returns `path` as a normalized absolute path (best effort: the original
+// spelling when the filesystem refuses to resolve it).
+std::string absolute_path(const std::string& path) {
+  std::error_code ec;
+  std::filesystem::path abs = std::filesystem::absolute(path, ec);
+  if (ec) return path;
+  return abs.lexically_normal().string();
+}
+
+// The `includer -> included` file edges of a translation unit, recovered from
+// the detailed preprocessing record. Unlike clang_getInclusions — which reports
+// each file only when it is actually *entered* — the record keeps an
+// InclusionDirective for every `#include` in the sources, including ones
+// guard-skipped because a sibling already pulled the file in. That makes the
+// per-member dependency closure of an umbrella TU exact.
+std::unordered_map<std::string, std::vector<std::string>> include_edges(
+    CXTranslationUnit tu) {
+  std::unordered_map<std::string, std::vector<std::string>> edges;
+  clang_visitChildren(
+      clang_getTranslationUnitCursor(tu),
+      [](CXCursor c, CXCursor, CXClientData data) {
+        if (clang_getCursorKind(c) != CXCursor_InclusionDirective) {
+          return CXChildVisit_Continue;
+        }
+        CXFile included = clang_getIncludedFile(c);
+        if (included == nullptr) return CXChildVisit_Continue;  // unresolved
+        CXFile from = nullptr;
+        unsigned line = 0, col = 0, off = 0;
+        clang_getFileLocation(clang_getCursorLocation(c), &from, &line, &col,
+                              &off);
+        if (from == nullptr) return CXChildVisit_Continue;
+        auto& e = *static_cast<
+            std::unordered_map<std::string, std::vector<std::string>>*>(data);
+        e[to_string(clang_getFileName(from))].push_back(
+            to_string(clang_getFileName(included)));
+        return CXChildVisit_Continue;
+      },
+      &edges);
+  return edges;
+}
+
+// Breadth-first transitive closure of `root` over `edges`, root first.
+std::vector<std::string> include_closure(
+    const std::unordered_map<std::string, std::vector<std::string>>& edges,
+    const std::string& root) {
+  std::vector<std::string> result{root};
+  std::unordered_set<std::string> visited{root};
+  for (std::size_t i = 0; i < result.size(); ++i) {
+    auto it = edges.find(result[i]);
+    if (it == edges.end()) continue;
+    for (const auto& next : it->second) {
+      if (visited.insert(next).second) result.push_back(next);
+    }
+  }
+  return result;
 }
 
 }  // namespace
@@ -98,9 +175,14 @@ std::vector<std::string> Parser::build_args(const std::string& path) const {
   std::vector<std::string> args;
 
   if (options_.compile_commands_dir) {
-    CompileDb db;
-    if (db.load(*options_.compile_commands_dir)) {
-      auto from_db = db.args_for(path);
+    // Loaded once per Parser, not once per file: the database does not change
+    // mid-run and reloading it for every translation unit is pure overhead.
+    if (compile_db_ == nullptr) {
+      compile_db_ = std::make_unique<CompileDb>();
+      compile_db_->load(*options_.compile_commands_dir);
+    }
+    if (compile_db_->loaded()) {
+      auto from_db = compile_db_->args_for(path);
       args.insert(args.end(), from_db.begin(), from_db.end());
     }
   }
@@ -116,6 +198,23 @@ std::vector<std::string> Parser::build_args(const std::string& path) const {
   args.push_back("-xc++");
   return args;
 }
+
+namespace {
+
+// Collects libclang error diagnostics from `tu` into `out.diagnostics`.
+void collect_diagnostics(CXTranslationUnit tu, model::ParsedModule& out) {
+  unsigned n = clang_getNumDiagnostics(tu);
+  for (unsigned i = 0; i < n; ++i) {
+    CXDiagnostic d = clang_getDiagnostic(tu, i);
+    if (clang_getDiagnosticSeverity(d) >= CXDiagnostic_Error) {
+      out.diagnostics.push_back(to_string(clang_formatDiagnostic(
+          d, clang_defaultDiagnosticDisplayOptions())));
+    }
+    clang_disposeDiagnostic(d);
+  }
+}
+
+}  // namespace
 
 bool Parser::parse_file(const std::string& path, model::ParsedModule& out,
                         std::vector<std::string>* tu_files) {
@@ -139,26 +238,109 @@ bool Parser::parse_file(const std::string& path, model::ParsedModule& out,
   }
   TuGuard guard{tu};
 
-  // Collect non-fatal diagnostics.
-  unsigned n = clang_getNumDiagnostics(tu);
-  for (unsigned i = 0; i < n; ++i) {
-    CXDiagnostic d = clang_getDiagnostic(tu, i);
-    if (clang_getDiagnosticSeverity(d) >= CXDiagnostic_Error) {
-      out.diagnostics.push_back(to_string(clang_formatDiagnostic(
-          d, clang_defaultDiagnosticDisplayOptions())));
-    }
-    clang_disposeDiagnostic(d);
-  }
+  collect_diagnostics(tu, out);
 
-  record_file(path, out);
+  std::unordered_set<std::string> seen = seen_from(out);
+  record_file(path, out, seen);
   note_tu_file(tu_files, path);
   // Track transitive #include dependencies so a header edit invalidates the
   // cached parse for every translation unit that pulled it in.
-  InclusionCtx ctx{&out, tu_files};
+  InclusionCtx ctx{&out, &seen, tu_files, nullptr};
   clang_getInclusions(tu, record_inclusion, &ctx);
   visit_translation_unit(clang_getTranslationUnitCursor(tu), path, out);
 
   return true;
+}
+
+bool Parser::parse_batch(const std::vector<std::string>& paths,
+                         model::ParsedModule& out,
+                         std::vector<std::vector<std::string>>* member_files,
+                         std::vector<bool>* member_ok) {
+  if (paths.empty()) return true;
+  if (paths.size() == 1) {
+    bool ok = parse_file(paths[0], out,
+                         member_files != nullptr ? &(*member_files)[0] : nullptr);
+    if (member_ok != nullptr) (*member_ok)[0] = ok;
+    return ok;
+  }
+
+  // The umbrella includes every member by absolute path so resolution is
+  // independent of the (synthetic) main file's location.
+  std::vector<std::string> abs;
+  abs.reserve(paths.size());
+  for (const auto& p : paths) abs.push_back(absolute_path(p));
+
+  std::string umbrella =
+      (std::filesystem::path(abs.front()).parent_path() /
+       ".clangquill-umbrella.cpp")
+          .string();
+  std::string contents;
+  for (const auto& p : abs) contents += "#include \"" + p + "\"\n";
+
+  std::vector<std::string> args = build_args(abs.front());
+  std::vector<const char*> argv;
+  argv.reserve(args.size());
+  for (const auto& a : args) argv.push_back(a.c_str());
+
+  unsigned flags = CXTranslationUnit_SkipFunctionBodies |
+                   CXTranslationUnit_DetailedPreprocessingRecord;
+  if (options_.keep_going) flags |= CXTranslationUnit_KeepGoing;
+
+  CXUnsavedFile unsaved{umbrella.c_str(), contents.c_str(),
+                        static_cast<unsigned long>(contents.size())};
+  CXTranslationUnit tu = nullptr;
+  CXErrorCode rc = clang_parseTranslationUnit2(
+      as_index(index_), umbrella.c_str(), argv.data(),
+      static_cast<int>(argv.size()), &unsaved, 1, flags, &tu);
+  if (rc != CXError_Success || tu == nullptr) {
+    if (tu) clang_disposeTranslationUnit(tu);
+    // The umbrella itself could not be created (should be rare): fall back to
+    // exact per-file parses so a pathological batch never costs symbols.
+    bool all_ok = true;
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+      bool ok = parse_file(paths[i], out,
+                           member_files != nullptr ? &(*member_files)[i] : nullptr);
+      if (member_ok != nullptr) (*member_ok)[i] = ok;
+      all_ok = all_ok && ok;
+    }
+    return all_ok;
+  }
+  TuGuard guard{tu};
+
+  collect_diagnostics(tu, out);
+
+  // Record every file the batch pulled in, minus the synthetic umbrella.
+  std::unordered_set<std::string> seen = seen_from(out);
+  InclusionCtx ctx{&out, &seen, nullptr, &umbrella};
+  clang_getInclusions(tu, record_inclusion, &ctx);
+
+  // Extract only declarations physically located in the member files. Both the
+  // caller's spelling and the absolute one are accepted, matching however
+  // libclang names the entered file.
+  std::vector<std::string> mains;
+  mains.reserve(paths.size() * 2);
+  mains.insert(mains.end(), paths.begin(), paths.end());
+  mains.insert(mains.end(), abs.begin(), abs.end());
+  visit_translation_unit(clang_getTranslationUnitCursor(tu), mains,
+                         /*trust_main_file=*/false, out);
+
+  bool all_ok = true;
+  if (member_files != nullptr || member_ok != nullptr) {
+    auto edges = include_edges(tu);
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+      // A member libclang never opened (missing file, broken include) parsed
+      // nothing; report it like a per-file hard failure.
+      CXFile file = clang_getFile(tu, abs[i].c_str());
+      bool entered = file != nullptr;
+      if (member_ok != nullptr) (*member_ok)[i] = entered;
+      all_ok = all_ok && entered;
+      if (member_files != nullptr && entered) {
+        (*member_files)[i] =
+            include_closure(edges, to_string(clang_getFileName(file)));
+      }
+    }
+  }
+  return all_ok;
 }
 
 namespace {
@@ -173,8 +355,8 @@ void append(std::vector<T>& dst, std::vector<T>& src) {
 // Merges `part` into `out` in place, deduplicating source files by path
 // (`files.path` is UNIQUE in the schema). All other rows are concatenated:
 // each translation unit only emits symbols/references physically located in its
-// own main file, so distinct inputs never collide, and symbol-keyed tables use
-// INSERT OR REPLACE on write to absorb any genuine cross-file duplicates.
+// own member files, so distinct batches never collide, and symbol-keyed tables
+// use INSERT OR REPLACE on write to absorb any genuine cross-file duplicates.
 void merge_into(model::ParsedModule& out, model::ParsedModule& part,
                 std::unordered_set<std::string>& seen_files) {
   for (auto& f : part.files) {
@@ -196,46 +378,77 @@ void merge_into(model::ParsedModule& out, model::ParsedModule& part,
 
 model::ParsedModule parse_files(const std::vector<std::string>& inputs,
                                 const ParseOptions& options,
-                                std::vector<std::vector<std::string>>* tu_files) {
-  // One result slot per input keeps the merge deterministic (input order)
-  // regardless of which thread parses which file or in what order it finishes.
-  std::vector<model::ParsedModule> parts(inputs.size());
+                                std::vector<std::vector<std::string>>* tu_files,
+                                std::vector<bool>* tu_parsed) {
   if (tu_files != nullptr) tu_files->assign(inputs.size(), {});
+  if (tu_parsed != nullptr) tu_parsed->assign(inputs.size(), false);
+
+  std::size_t batch_size;
+  if (options.compile_commands_dir) {
+    batch_size = 1;  // per-file compile flags cannot share one TU
+  } else if (options.tu_batch > 0) {
+    batch_size = static_cast<std::size_t>(options.tu_batch);
+  } else {
+    batch_size = kDefaultTuBatch;
+  }
+  const std::size_t num_batches =
+      inputs.empty() ? 0 : (inputs.size() + batch_size - 1) / batch_size;
+
+  // One result slot per batch keeps the merge deterministic (input order)
+  // regardless of which thread parses which batch or in what order it finishes.
+  std::vector<model::ParsedModule> parts(num_batches);
+  // Per-batch success flags, flattened into `tu_parsed` only after the workers
+  // join: writing worker results straight into a shared std::vector<bool> would
+  // race, since its bit-packed elements can share a word across batches.
+  std::vector<std::vector<bool>> ok_parts(num_batches);
 
   unsigned effective_jobs = options.jobs > 0
                                 ? static_cast<unsigned>(options.jobs)
                                 : std::thread::hardware_concurrency();
   if (effective_jobs == 0) effective_jobs = 1;
   effective_jobs =
-      std::min<unsigned>(effective_jobs, static_cast<unsigned>(inputs.size()));
+      std::min<unsigned>(effective_jobs, static_cast<unsigned>(num_batches));
 
   // Each worker owns its own Parser (hence its own CXIndex) and pulls the next
-  // unclaimed input until the queue drains.
+  // unclaimed batch until the queue drains.
   std::atomic<std::size_t> next{0};
   auto worker = [&]() {
     Parser parser(options);
-    std::size_t i;
-    while ((i = next.fetch_add(1)) < inputs.size()) {
+    std::size_t b;
+    while ((b = next.fetch_add(1)) < num_batches) {
+      const std::size_t begin = b * batch_size;
+      const std::size_t end = std::min(begin + batch_size, inputs.size());
+      std::vector<std::string> members(inputs.begin() + begin,
+                                       inputs.begin() + end);
       // Parse into a local module so a mid-parse exception cannot leave
       // half-built rows in the slot: only a clean parse is published, and an
       // exception escaping a worker thread (which would otherwise call
       // std::terminate) is contained as a diagnostic (parse errors are already
-      // reported this way) so the run carries on with the next input.
+      // reported this way) so the run carries on with the next batch.
       try {
         model::ParsedModule part;
-        // Each thread writes its own slot i, so the per-TU file lists need no
-        // synchronisation despite the shared output vector.
-        parser.parse_file(inputs[i], part,
-                          tu_files != nullptr ? &(*tu_files)[i] : nullptr);
-        parts[i] = std::move(part);
+        std::vector<std::vector<std::string>> member_files(members.size());
+        std::vector<bool> member_ok(members.size(), false);
+        parser.parse_batch(members, part,
+                           tu_files != nullptr ? &member_files : nullptr,
+                           tu_parsed != nullptr ? &member_ok : nullptr);
+        // Each thread writes only its own batch's slots — distinct objects in
+        // the shared outer vectors — so this needs no synchronisation. The
+        // success flags stay per-batch (ok_parts) until the join, because
+        // bit-packed vector<bool> elements are not distinct objects.
+        for (std::size_t i = 0; i < members.size(); ++i) {
+          if (tu_files != nullptr) (*tu_files)[begin + i] = std::move(member_files[i]);
+        }
+        ok_parts[b] = std::move(member_ok);
+        parts[b] = std::move(part);
       } catch (const std::exception& e) {
-        parts[i] = model::ParsedModule{};
-        parts[i].diagnostics.push_back("exception parsing " + inputs[i] + ": " +
-                                       e.what());
+        parts[b] = model::ParsedModule{};
+        parts[b].diagnostics.push_back("exception parsing batch of " +
+                                       inputs[begin] + ": " + e.what());
       } catch (...) {
-        parts[i] = model::ParsedModule{};
-        parts[i].diagnostics.push_back("unknown exception parsing " +
-                                       inputs[i]);
+        parts[b] = model::ParsedModule{};
+        parts[b].diagnostics.push_back("unknown exception parsing batch of " +
+                                       inputs[begin]);
       }
     }
   };
@@ -257,6 +470,17 @@ model::ParsedModule parse_files(const std::vector<std::string>& inputs,
       throw;
     }
     for (auto& t : threads) t.join();
+  }
+
+  if (tu_parsed != nullptr) {
+    // A batch that died with an exception leaves its ok_parts slot empty, so
+    // its inputs keep their initial `false`.
+    for (std::size_t b = 0; b < num_batches; ++b) {
+      const std::size_t begin = b * batch_size;
+      for (std::size_t i = 0; i < ok_parts[b].size(); ++i) {
+        (*tu_parsed)[begin + i] = ok_parts[b][i];
+      }
+    }
   }
 
   model::ParsedModule merged;

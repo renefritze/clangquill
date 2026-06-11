@@ -234,28 +234,28 @@ def test_incremental_reparses_only_the_changed_translation_unit(
     # Spy on the two parse entry points to prove the incremental rebuild takes
     # the per-TU path for exactly the touched input and never re-parses the world.
     full_calls = 0
-    tu_calls: list[str] = []
+    tu_calls: list[list[str]] = []
     real_full = _core.parse_to_sqlite
-    real_tu = _core.parse_tu_to_sqlite
+    real_tus = _core.parse_tus_to_sqlite
 
     def spy_full(inputs: list[str], db: str, opt: object) -> object:
         nonlocal full_calls
         full_calls += 1
         return real_full(inputs, db, opt)
 
-    def spy_tu(inp: str, db: str, opt: object) -> object:
-        tu_calls.append(Path(inp).name)
-        return real_tu(inp, db, opt)
+    def spy_tus(inputs: list[str], db: str, opt: object) -> object:
+        tu_calls.append([Path(inp).name for inp in inputs])
+        return real_tus(inputs, db, opt)
 
     monkeypatch.setattr(_core, "parse_to_sqlite", spy_full)
-    monkeypatch.setattr(_core, "parse_tu_to_sqlite", spy_tu)
+    monkeypatch.setattr(_core, "parse_tus_to_sqlite", spy_tus)
 
     (project / "alpha.hpp").write_text("/// alpha ns edited\nnamespace alpha { /// f\nint f(); }\n")
     result = build(config, base_dir=project)
 
     assert result.parsed
     assert full_calls == 0  # no whole-module rebuild
-    assert tu_calls == ["alpha.hpp"]  # only the touched TU re-parsed
+    assert tu_calls == [["alpha.hpp"]]  # only the touched TU re-parsed
     assert result.pages_written == ["alpha.md"]
 
 
@@ -273,29 +273,29 @@ def test_incremental_shared_header_change_reparses_every_dependent(
     build(config, base_dir=project)
 
     full_calls = 0
-    tu_calls: list[str] = []
+    tu_calls: list[list[str]] = []
     real_full = _core.parse_to_sqlite
-    real_tu = _core.parse_tu_to_sqlite
+    real_tus = _core.parse_tus_to_sqlite
 
     def spy_full(inputs: list[str], db: str, opt: object) -> object:
         nonlocal full_calls
         full_calls += 1
         return real_full(inputs, db, opt)
 
-    def spy_tu(inp: str, db: str, opt: object) -> object:
-        tu_calls.append(Path(inp).name)
-        return real_tu(inp, db, opt)
+    def spy_tus(inputs: list[str], db: str, opt: object) -> object:
+        tu_calls.append([Path(inp).name for inp in inputs])
+        return real_tus(inputs, db, opt)
 
     monkeypatch.setattr(_core, "parse_to_sqlite", spy_full)
-    monkeypatch.setattr(_core, "parse_tu_to_sqlite", spy_tu)
+    monkeypatch.setattr(_core, "parse_tus_to_sqlite", spy_tus)
 
     (project / "shared.hpp").write_text("#pragma once\nusing Id = unsigned long;\n")
     result = build(config, base_dir=project)
 
     assert result.parsed
     assert full_calls == 0  # still no whole-module rebuild
-    # Both dependents re-parsed via the per-TU path; the order follows the inputs.
-    assert tu_calls == ["alpha.hpp", "beta.hpp"]
+    # Both dependents re-parsed via one per-TU batch; the order follows the inputs.
+    assert tu_calls == [["alpha.hpp", "beta.hpp"]]
     # The IR is consistent: no symbol was lost across the partial re-parse.
     assert {"a", "b"}.issubset({s.qualified_name for s in _store_symbols(result.db_path)})
 
@@ -305,7 +305,7 @@ def test_incremental_partial_parse_failure_is_atomic(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Two stale inputs where the second re-parse fails: the IR must not be left
+    # Two stale inputs where the batched re-parse fails: the IR must not be left
     # half-updated, and the cache must still describe the pre-build state so the
     # next run retries cleanly rather than trusting a torn IR.
     (project / "alpha.hpp").write_text("/// alpha ns\nnamespace alpha { /// f\nint f(); }\n")
@@ -316,22 +316,15 @@ def test_incremental_partial_parse_failure_is_atomic(
     ir = project / ".cache" / pipeline.IR_NAME
     ir_before = ir.read_bytes()
 
-    # Edit both inputs so both are stale, then make the second per-TU parse blow up.
+    # Edit both inputs so both are stale, then make the batched re-parse blow up.
     (project / "alpha.hpp").write_text("/// alpha ns edit\nnamespace alpha { /// f\nint f(); }\n")
     (project / "beta.hpp").write_text("/// beta ns edit\nnamespace beta { /// g\nint g(); }\n")
 
-    real_tu = _core.parse_tu_to_sqlite
-    calls = 0
+    def flaky_tus(*_args: object, **_kwargs: object) -> object:
+        msg = "boom"
+        raise RuntimeError(msg)
 
-    def flaky_tu(inp: str, db: str, opt: object) -> object:
-        nonlocal calls
-        calls += 1
-        if calls == 2:  # fail on the second stale TU, after the first committed
-            msg = "boom"
-            raise RuntimeError(msg)
-        return real_tu(inp, db, opt)
-
-    monkeypatch.setattr(_core, "parse_tu_to_sqlite", flaky_tu)
+    monkeypatch.setattr(_core, "parse_tus_to_sqlite", flaky_tus)
 
     with pytest.raises(RuntimeError, match="boom"):
         build(config, base_dir=project)

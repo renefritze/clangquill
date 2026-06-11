@@ -88,6 +88,9 @@ the SQLite IR and a small bookkeeping cache in that directory between runs and:
 
 - **skips the parse** when no input — or transitively `#include`d header —
   changed, reusing the cached IR instead of invoking libclang again;
+- **re-parses only the stale translation units** when some files did change:
+  the cache attributes every `#include`d file to the inputs that pull it in, so
+  an edit re-parses just those inputs (in parallel) into the existing IR;
 - **rewrites only the pages whose content changed**, comparing each rendered
   page against the hash recorded for the previous run; and
 - **deletes pages whose symbols disappeared**, so removing a declaration removes
