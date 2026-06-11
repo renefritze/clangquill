@@ -8,8 +8,12 @@ repo = "https://github.com/abseil/abseil-cpp.git"
 ref = "20240722.0"
 std = "c++17"
 include_dirs = ["."]
-inputs = ["absl/strings/*.h"]
+# Recursive glob so clangquill sees the same tree Doxygen scans (RECURSIVE=YES),
+# including absl/strings/internal/; FILE_PATTERNS keeps Doxygen on the same
+# extension so both tools process the identical file set.
+inputs = ["absl/strings/**/*.h"]
 doxygen_input = ["absl/strings"]
+doxygen_file_patterns = ["*.h"]
 
 [patch]
 files = ["absl/strings/string_view.h"]

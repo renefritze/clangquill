@@ -17,8 +17,10 @@ For every ``(repo, stage)`` pair three *scenarios* are measured, each repeated
     incremental  apply a small fixed patch, then rebuild
 
 ClangQuill's incremental cache (only active with ``--cache-dir``) makes the
-``noop`` and ``incremental`` scenarios cheap; Doxygen has no parse cache and
-re-parses every run, which is exactly the contrast the benchmark surfaces.
+``noop`` scenario cheap (the parse is skipped entirely); ``incremental``
+currently re-parses the whole module but rewrites only the changed pages.
+Doxygen has no parse cache and re-parses every run, which is exactly the
+contrast the benchmark surfaces.
 
 Design notes / benchmarking practices baked in:
 
@@ -109,6 +111,12 @@ class RepoConfig:
     compile_args: list[str] = field(default_factory=list)
     inputs: list[str] = field(default_factory=list)
     doxygen_input: list[str] = field(default_factory=list)
+    # Workload parity with the clangquill ``inputs`` globs: ``doxygen_recursive``
+    # mirrors whether the glob descends (``**``), and ``doxygen_file_patterns``
+    # pins Doxygen's FILE_PATTERNS to the same extensions, so both tools always
+    # process the identical file set.
+    doxygen_recursive: bool = True
+    doxygen_file_patterns: list[str] = field(default_factory=list)
     patch_files: list[str] = field(default_factory=list)
 
     @classmethod
@@ -127,6 +135,8 @@ class RepoConfig:
             compile_args=list(data.get("compile_args", [])),
             inputs=list(data.get("inputs", [])),
             doxygen_input=list(data.get("doxygen_input", [])),
+            doxygen_recursive=bool(data.get("doxygen_recursive", True)),
+            doxygen_file_patterns=list(data.get("doxygen_file_patterns", [])),
             patch_files=list(patch.get("files", [])),
         )
 
@@ -400,7 +410,10 @@ def write_doxyfile(ctx: RepoContext, mode: str) -> Path:
         f'PROJECT_NAME = "{cfg.name}"',
         f"OUTPUT_DIRECTORY = {out_dir}",
         f"INPUT = {inputs}",
-        "RECURSIVE = YES",
+        # Both knobs exist to keep Doxygen's file set identical to clangquill's
+        # ``inputs`` globs; see RepoConfig.
+        f"RECURSIVE = {'YES' if cfg.doxygen_recursive else 'NO'}",
+        *([f"FILE_PATTERNS = {' '.join(cfg.doxygen_file_patterns)}"] if cfg.doxygen_file_patterns else []),
         "QUIET = YES",
         "WARNINGS = NO",
         "WARN_IF_UNDOCUMENTED = NO",
@@ -598,6 +611,24 @@ def tool_version(argv: list[str]) -> str:
         return ""
 
 
+def clangquill_version(cmd: list[str]) -> str:
+    """Return the clangquill version, robust to a CLI without ``--version``.
+
+    Older published wheels predate the ``--version`` flag (which made earlier
+    reports record ``n/a``), so fall back to the installed package metadata —
+    the harness runs in the same environment as the tool it drives.
+    """
+    version = tool_version([*cmd, "--version"])
+    if version:
+        return version
+    try:
+        import importlib.metadata  # noqa: PLC0415
+
+        return f"clangquill {importlib.metadata.version('clangquill')}"
+    except Exception:
+        return ""
+
+
 def libclang_version() -> str:
     """Return the linked libclang version string, or "" if unavailable."""
     try:
@@ -626,7 +657,7 @@ def environment_info(tools: Tools) -> dict:
         "ram_gb": total_ram_gb(),
         "python": platform.python_version(),
         "tools": {
-            "clangquill": tool_version([*tools.clangquill, "--version"]),
+            "clangquill": clangquill_version(tools.clangquill),
             "sphinx": tool_version([*tools.sphinx, "--version"]),
             "doxygen": tool_version([*tools.doxygen, "--version"]),
             "libclang": libclang_version(),
@@ -681,6 +712,73 @@ def _fmt(value: float | None) -> str:
     return f"{value:.3f}" if value is not None else "—"
 
 
+def _cold_sample(results: dict, repo: str, stage: str) -> dict | None:
+    """Return the first recorded cold sample for one ``(repo, stage)``, or None."""
+    try:
+        samples = results[repo][stage]["cold"]["samples"]
+    except (KeyError, TypeError):
+        return None
+    return samples[0] if samples else None
+
+
+def _human_bytes(count: float) -> str:
+    """Format a byte count as B/KB/MB for the report."""
+    for unit in ("B", "KB", "MB"):
+        if count < 1024:  # noqa: PLR2004
+            return f"{count:.0f} {unit}" if unit == "B" else f"{count:.1f} {unit}"
+        count /= 1024
+    return f"{count:.1f} GB"
+
+
+def _work_lines(results: dict, repo: str) -> list[str]:
+    """Build the per-repo "how much did each tool actually do" lines.
+
+    Wall time alone can flatter a tool that extracted very little (e.g. when
+    libclang lacks a repo's dependency tree), so the report pairs every timing
+    table with the cold-run symbol/file/page counts and output sizes — and
+    calls out non-zero exit codes — to make coverage gaps visible.
+    """
+    out: list[str] = []
+    bits: list[str] = []
+    myst = _cold_sample(results, repo, "clangquill-myst")
+    if myst is not None:
+        work = myst.get("work") or {}
+        output = myst.get("output") or {}
+        seg = "clangquill-myst: "
+        if work:
+            seg += (
+                f"{work.get('symbols', '?')} symbols from {work.get('files', '?')} files "
+                f"→ {work.get('pages_written', '?')} pages, "
+            )
+        seg += f"output {output.get('files', 0)} files · {_human_bytes(output.get('bytes', 0))}"
+        bits.append(seg)
+    for stage in ("doxygen-xml", "doxygen-html"):
+        sample = _cold_sample(results, repo, stage)
+        if sample is not None:
+            output = sample.get("output") or {}
+            bits.append(f"{stage}: output {output.get('files', 0)} files · {_human_bytes(output.get('bytes', 0))}")
+    if bits:
+        out.append("- **work (cold)** — " + "; ".join(bits))
+
+    failures: list[str] = []
+    for stage, stage_data in results.get(repo, {}).items():
+        if not isinstance(stage_data, dict):
+            continue
+        for scenario, scenario_data in stage_data.items():
+            if not isinstance(scenario_data, dict):
+                continue
+            codes = sorted({s["exit_code"] for s in scenario_data.get("samples", []) if s.get("exit_code")})
+            if codes:
+                failures.append(f"{stage}/{scenario}={','.join(map(str, codes))}")
+    if failures:
+        out.append(
+            "- **non-zero exits** — "
+            + "; ".join(failures)
+            + " (diagnostics in logs; the work figures above show the achieved coverage)",
+        )
+    return out
+
+
 def render_markdown(payload: dict) -> str:
     """Render the results ``payload`` as a Markdown report."""
     env = payload["environment"]
@@ -710,8 +808,9 @@ def render_markdown(payload: dict) -> str:
             lines.append(f"| {stage} | " + " | ".join(cells) + " |")
         lines.append("")
 
-        # Derived comparisons.
+        # Derived comparisons, then the work/coverage context for the timings.
         lines += _derived_lines(payload["results"], repo, scenarios)
+        lines += _work_lines(payload["results"], repo)
         lines.append("")
     return "\n".join(lines)
 
