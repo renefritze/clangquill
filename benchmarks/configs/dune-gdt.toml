@@ -9,8 +9,15 @@ repo = "https://github.com/dune-gdt/dune-gdt.git"
 ref = "b51af5ba309da83a234174ca916df029f53e3d15" # main @ 2026-06-09
 std = "c++17"
 include_dirs = ["."]
+# Top-level headers only on both sides: clangquill's glob is single-level, so
+# Doxygen must not recurse into the (much larger) subtree — otherwise the two
+# tools time unequal workloads. Without the DUNE dependency stack the deep tree
+# is mostly unparseable for libclang anyway; widen both sides together if you
+# benchmark with the full stack installed.
 inputs = ["dune/gdt/*.hh"]
 doxygen_input = ["dune/gdt"]
+doxygen_recursive = false
+doxygen_file_patterns = ["*.hh"]
 
 [patch]
 files = ["dune/gdt/operators/interfaces.hh"]

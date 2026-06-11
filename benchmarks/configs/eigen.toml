@@ -6,8 +6,12 @@ repo = "https://gitlab.com/libeigen/eigen.git"
 ref = "3.4.0"
 std = "c++17"
 include_dirs = ["."]
-inputs = ["Eigen/src/Core/*.h"]
+# Recursive glob so clangquill covers the same tree Doxygen scans (arch/,
+# functors/, products/, util/ — not just the top-level Core headers);
+# FILE_PATTERNS keeps Doxygen on the identical file set.
+inputs = ["Eigen/src/Core/**/*.h"]
 doxygen_input = ["Eigen/src/Core"]
+doxygen_file_patterns = ["*.h"]
 
 [patch]
 files = ["Eigen/src/Core/Matrix.h"]

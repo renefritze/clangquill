@@ -11,10 +11,13 @@ the same pipeline here so they behave identically. The steps are:
 When ``clangquill_cache_dir`` is configured the build becomes *incremental*
 (milestone M6): the SQLite IR and a small bookkeeping cache persist between
 runs, so an unchanged build skips both the libclang parse and every output
-write, touching one header re-parses and rewrites only the affected pages, and
-symbols that disappear have their pages deleted. Without a cache directory the
-build is stateless: it always re-parses into a throwaway IR, rewrites every
-page, and prunes stale pages via a manifest.
+write, and symbols that disappear have their pages deleted. Note the cache is
+currently all-or-nothing on the parse side: touching any input (or transitive
+include) re-parses the whole module — but only the affected pages are
+rewritten. Per-file re-parses are future work (see the per-TU incremental
+issue). Without a cache directory the build is stateless: it always re-parses
+into a throwaway IR, rewrites every page, and prunes stale pages via a
+manifest.
 """
 
 from __future__ import annotations

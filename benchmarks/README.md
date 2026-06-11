@@ -20,10 +20,11 @@ For every `(repo, stage)` pair, three scenarios are timed:
 - **noop** — immediately rebuild with no source change.
 - **incremental** — apply a small fixed patch, then rebuild.
 
-ClangQuill's incremental cache (only active with `--cache-dir`) makes *noop* and
-*incremental* cheap — it skips the parse and rewrites only changed pages. Doxygen
-has no parse cache and re-parses on every run, which is exactly the contrast the
-benchmark surfaces.
+ClangQuill's incremental cache (only active with `--cache-dir`) makes *noop*
+cheap — the parse is skipped entirely. *incremental* currently re-parses the
+whole module (the cache is all-or-nothing on the parse side) but rewrites only
+the changed pages. Doxygen has no parse cache and re-parses on every run, which
+is exactly the contrast the benchmark surfaces.
 
 ## Prerequisites
 
@@ -82,8 +83,11 @@ Each run writes a timestamped pair into `benchmarks/results/` (gitignored):
 ## Continuous benchmarking
 
 The `benchmark` GitHub Actions workflow (`.github/workflows/benchmark.yml`) runs
-on version tags (`v*`) and on manual dispatch. It installs the locked toolchain,
-runs the harness, appends the report to the job summary, uploads the raw results
+on version tags (`v*`) and on manual dispatch. It installs the locked
+sphinx/myst toolchain, **builds clangquill from the checked-out source** (against
+LLVM 22 from apt.llvm.org, the same libclang major the release wheels bundle) so
+the published numbers measure the commit they are labeled with, runs the
+harness, appends the report to the job summary, uploads the raw results
 as an artifact, and — on a tagged run — regenerates
 [`docs/benchmarks.md`](../docs/benchmarks.md) and opens a pull request against
 `main` with the refreshed numbers (so the published docs track tagged releases).
@@ -105,8 +109,10 @@ std = "c++17"
 include_dirs = ["."]            # -I dirs for clangquill, relative to repo root
 defines = []                    # -D defines
 compile_args = []               # extra clang args
-inputs = ["Eigen/src/Core/*.h"] # clangquill globs (relative to repo root)
-doxygen_input = ["Eigen/src/Core"]  # Doxygen INPUT dirs (RECURSIVE=YES), same coverage
+inputs = ["Eigen/src/Core/**/*.h"]  # clangquill globs (relative to repo root)
+doxygen_input = ["Eigen/src/Core"]  # Doxygen INPUT dirs, same tree as the globs
+doxygen_recursive = true            # Doxygen RECURSIVE; false when the glob is single-level
+doxygen_file_patterns = ["*.h"]     # Doxygen FILE_PATTERNS; pin to the glob's extension
 [patch]
 files = ["Eigen/src/Core/Matrix.h"]  # deterministic incremental-edit targets
 ```
@@ -125,9 +131,14 @@ edit deterministic without shipping brittle diffs.
   min/median/mean/stddev, with the **median** as the headline.
 - **Per-process metrics** via `os.wait4`: CPU user+sys time and peak RSS, not
   wall clock alone, so scheduler noise is visible.
-- **Fair inputs**: both tools are pointed at the same files; outputs go to
+- **Fair inputs**: both tools are pointed at the same files — the clangquill
+  globs and Doxygen's `RECURSIVE`/`FILE_PATTERNS` are kept in lockstep per
+  config so neither tool processes files the other does not; outputs go to
   isolated directories reset between repetitions; tools run quietly with logs
   captured under `.work/_bench/<repo>/logs/`.
+- **Work metrics in the report**: each repo section pairs the timings with the
+  cold-run symbol/file/page counts and output sizes for both tools (plus any
+  non-zero exit codes), so a fast run that extracted little is visible as such.
 - **Single-threaded & graphviz-free**: Doxygen runs with `HAVE_DOT = NO` and
   ClangQuill is single-threaded, so neither gets a parallelism advantage.
 - **Recorded provenance**: tool + libclang versions, resolved commit, machine

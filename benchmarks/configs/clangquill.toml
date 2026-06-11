@@ -5,14 +5,12 @@ name = "clangquill"
 local = true
 std = "c++20"
 include_dirs = ["src/cpp"]
-inputs = [
-    "src/cpp/core/*.hpp",
-    "src/cpp/model/*.hpp",
-    "src/cpp/hash/*.hpp",
-    "src/cpp/parser/*.hpp",
-    "src/cpp/store/*.hpp",
-]
+# Recursive glob over every header; FILE_PATTERNS restricts Doxygen to the same
+# *.hpp set (it would otherwise also lex the .cpp implementation files, doing
+# work clangquill is never asked to do).
+inputs = ["src/cpp/**/*.hpp"]
 doxygen_input = ["src/cpp"]
+doxygen_file_patterns = ["*.hpp"]
 
 [patch]
 files = ["src/cpp/model/symbol.hpp"]
