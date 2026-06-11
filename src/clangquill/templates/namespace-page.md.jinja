@@ -1,0 +1,8 @@
+{% set comment = gen.comment(symbol) %}
+{{ "#" * level }} {{ gen.label(symbol) }} `{{ symbol.qualified_name or "(global namespace)" }}`
+
+{{ render_comment(comment) }}
+{% for child in symbols %}
+
+{{ gen.render_symbol(child, level=level + 1) }}
+{% endfor %}

@@ -36,6 +36,7 @@ Generator(store, template_dirs=["my_templates"]).generate("docs/api")
 | `group` | Doxygen `\defgroup` group pages |
 | `index` | the generated toctree page |
 | `file` | one page per source file (`group_by="file"`) |
+| `namespace-page` | a namespace's own leaf members under `group_by="class"` |
 
 Reusable macros live in `templates/partials/`: `signature.md.jinja`,
 `param-table.md.jinja`, and `comment-block.md.jinja`.
