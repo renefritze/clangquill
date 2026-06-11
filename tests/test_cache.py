@@ -72,7 +72,10 @@ def test_parse_is_current_skips_hash_when_metadata_unchanged(
         assert cache.parse_is_current("fp-1")
 
 
-def test_parse_is_current_falls_back_to_hash_when_only_mtime_changes(tmp_path: Path) -> None:
+def test_parse_is_current_falls_back_to_hash_when_only_mtime_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     header = tmp_path / "a.hpp"
     header.write_text("one", encoding="utf-8")
     with BuildCache.open(tmp_path / "cache") as cache:
@@ -86,17 +89,16 @@ def test_parse_is_current_falls_back_to_hash_when_only_mtime_changes(tmp_path: P
         assert cache.parse_is_current("fp-1")
 
         # The hash fallback heals the stored metadata, so a second noop now hits
-        # the fast-path without re-reading the file.
+        # the fast-path without re-reading the file. The stub is scoped to just
+        # this call (via monkeypatch.context) because the same-size edit below
+        # relies on the real hash to detect the change.
         def explode(_path: object) -> str:
             msg = "metadata should have been refreshed after the hash fallback"
             raise AssertionError(msg)
 
-        original = cache_module.file_sha256
-        cache_module.file_sha256 = explode
-        try:
+        with monkeypatch.context() as m:
+            m.setattr(cache_module, "file_sha256", explode)
             assert cache.parse_is_current("fp-1")
-        finally:
-            cache_module.file_sha256 = original
 
         # Same-size edit (3 bytes -> 3 bytes) still invalidates via the hash.
         header.write_text("two", encoding="utf-8")
