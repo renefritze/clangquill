@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <exception>
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -189,7 +190,18 @@ model::ParsedModule parse_files(const std::vector<std::string>& inputs,
     Parser parser(options);
     std::size_t i;
     while ((i = next.fetch_add(1)) < inputs.size()) {
-      parser.parse_file(inputs[i], parts[i]);
+      // An exception escaping a worker thread would call std::terminate and
+      // crash the whole process, so contain it as a diagnostic (parse errors
+      // are already reported this way) and carry on with the next input.
+      try {
+        parser.parse_file(inputs[i], parts[i]);
+      } catch (const std::exception& e) {
+        parts[i].diagnostics.push_back("exception parsing " + inputs[i] + ": " +
+                                       e.what());
+      } catch (...) {
+        parts[i].diagnostics.push_back("unknown exception parsing " +
+                                       inputs[i]);
+      }
     }
   };
 
