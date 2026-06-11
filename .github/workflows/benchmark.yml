@@ -64,7 +64,7 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
         with:
           python-version: '3.13'
-      - name: Install benchmark dependencies (clangquill from this checkout + sphinx + myst)
+      - name: Install benchmark dependencies (checkout build + sphinx + myst)
         # benchmarks/ is a standalone uv project; sync pulls sphinx/myst (and the
         # locked clangquill wheel as a placeholder), then the wheel is replaced
         # with a build of the checked-out source so the published numbers track
