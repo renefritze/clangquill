@@ -32,10 +32,11 @@ concurrency:
 jobs:
   benchmark:
     runs-on: ubuntu-24.04
-    # Needed to push the docs-update branch and open the pull request.
+    # The docs-update branch push and PR are performed with the minted GitHub
+    # App token (see the step below), not the default GITHUB_TOKEN, so the job
+    # itself only needs read access to check out the repo.
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     steps:
       - name: Mint GitHub App token
         # Open the docs PR as the benchmark GitHub App rather than with the
@@ -43,8 +44,8 @@ jobs:
         # other workflows (GitHub suppresses recursive runs), so the docs PR's
         # CI would never start; an App installation token sidesteps that and
         # also attributes the PR to the App instead of github-actions[bot].
-        # Only needed on tag runs, but minting is cheap and the token is unused
-        # on dispatch runs that skip the PR step.
+        # Gated to tag runs by the `if` below: dispatch runs skip both this
+        # step and the PR step, so the token is only minted when it is used.
         id: app-token
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
