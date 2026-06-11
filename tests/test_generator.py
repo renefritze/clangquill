@@ -143,6 +143,64 @@ def test_group_by_file_writes_one_page_per_file(gen: Generator, tmp_path: Path) 
     assert "geo::Circle" in page
 
 
+def test_group_by_class_splits_containers_into_pages(gen: Generator, tmp_path: Path) -> None:
+    out = tmp_path / "api"
+    pages = gen.generate(out, group_by="class")
+    # The geo namespace becomes its own page; Circle (a class with members) is
+    # split out into a second page. Shape has no members, so it stays inline in
+    # the namespace page rather than earning a file of its own.
+    assert pages == ["geo", "geo_Circle"]
+
+    namespace_page = (out / "geo.md").read_text()
+    circle_page = (out / "geo_Circle.md").read_text()
+    # Circle's declaration lives only on its own page, not inline in the namespace.
+    assert "{cpp:class} geo::Circle" in circle_page
+    assert "{cpp:class} geo::Circle" not in namespace_page
+    # Circle's members ride along on the Circle page.
+    assert "geo::Circle::area" in circle_page
+    # The namespace page still holds its loose members (free function, enum, …)
+    # and the empty Shape class.
+    assert "{cpp:class} geo::Shape" in namespace_page
+    assert "geo::scale" in namespace_page
+
+
+def test_group_by_class_honours_include_undocumented(store: Store, tmp_path: Path) -> None:
+    # With undocumented symbols suppressed, an empty/undocumented container would
+    # not earn a page; here every container is documented, so Circle still splits.
+    gen = Generator(store, include_undocumented=False)
+    pages = gen.generate(tmp_path / "api", group_by="class")
+    assert pages == ["geo", "geo_Circle"]
+    # The undocumented free function is dropped from the namespace page entirely.
+    assert "geo::mystery" not in (tmp_path / "api" / "geo.md").read_text()
+
+
+def test_group_by_class_builds_with_cross_page_xrefs(gen: Generator, tmp_path: Path) -> None:
+    sphinx = pytest.importorskip("sphinx")
+    pytest.importorskip("myst_parser")
+    from sphinx.application import Sphinx  # noqa: PLC0415
+
+    src = tmp_path / "src"
+    gen.generate(src, group_by="class")
+    (src / "conf.py").write_text('project = "fix"\nextensions = ["myst_parser"]\nmaster_doc = "index"\n')
+
+    warnings = tmp_path / "warnings.txt"
+    # warningiserror turns a dangling cross-reference into a build failure, so a
+    # clean build proves the {cpp:any} role to geo::Circle still resolves now
+    # that Circle lives on a different page than the geo::scale @see that links it.
+    app = Sphinx(
+        str(src),
+        str(src),
+        str(tmp_path / "out"),
+        str(tmp_path / "doctree"),
+        "html",
+        warningiserror=True,
+        status=None,
+        warning=warnings.open("w"),
+    )
+    app.build()
+    assert sphinx.__version__
+
+
 def test_relpath_filter_reroots_under_base(store: Store) -> None:
     gen = Generator(store, path_base="/work/repo")
     # A file under the base is shown relative, with forward slashes.

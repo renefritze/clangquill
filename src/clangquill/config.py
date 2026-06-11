@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 CONFIG_PREFIX = "clangquill_"
 
 # Permitted values for ``group_by`` (how generated pages are partitioned).
-GROUP_BY_CHOICES = ("symbol", "file")
+GROUP_BY_CHOICES = ("symbol", "file", "class")
 
 
 class ConfigError(ValueError):
@@ -71,6 +71,10 @@ class Config:
     #: Comment-parser override (a registered name or a dotted import path).
     comment_parser: str | None = None
     #: How to partition output pages: one of :data:`GROUP_BY_CHOICES`.
+    #: ``"symbol"`` is one page per top-level symbol, ``"file"`` one page per
+    #: parsed source file, and ``"class"`` splits each namespace/class container
+    #: into a page per documented child class/namespace (so a project whose API
+    #: lives in a single namespace no longer renders as one colossal page).
     group_by: str = "symbol"
     #: Directory that rendered file paths are shown relative to, resolved
     #: against the base directory (Sphinx srcdir / CWD). None keeps the absolute

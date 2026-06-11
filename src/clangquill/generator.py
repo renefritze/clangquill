@@ -112,6 +112,19 @@ _FUNCTION_KINDS = frozenset(
     },
 )
 
+# Kinds that can host their own page under ``group_by="class"``: a namespace or
+# record that holds documented members is split out so it (and each of its own
+# nested containers) renders to a separate file rather than inline in its parent.
+_CONTAINER_KINDS = frozenset(
+    {
+        SymbolKind.NAMESPACE,
+        SymbolKind.CLASS,
+        SymbolKind.STRUCT,
+        SymbolKind.UNION,
+        SymbolKind.CLASS_TEMPLATE,
+    },
+)
+
 _SLUG_RE = re.compile(r"[^0-9A-Za-z]+")
 _BLANKS_RE = re.compile(r"\n{3,}")
 
@@ -180,6 +193,13 @@ class Generator:
         # file: a namespace spans files, but its page-local section must only
         # show the members physically declared in the file being rendered.
         self._file_scope: int | None = None
+        # When rendering class-grouped pages (group_by="class"), every container
+        # that earns its own page is dropped from its parent's child walk, so the
+        # parent page lists only its loose members and each nested class/namespace
+        # renders to its own file. The flag scopes that filtering to class mode so
+        # symbol/file rendering is untouched.
+        self._class_scope: bool = False
+        self._page_worthy_cache: dict[str, bool] = {}
         # Memoise the (visible) file-roots per file: file grouping asks for them
         # twice (the page gate and the render), and the result is stable for a
         # given store.
@@ -219,9 +239,36 @@ class Generator:
 
         Under a file scope (file-grouped pages) children declared in other files
         are dropped, so a namespace re-opened across files only contributes the
-        members that physically belong to the page being rendered.
+        members that physically belong to the page being rendered. Under a class
+        scope (class-grouped pages) children that earn their own page (nested
+        namespaces and records with documented members) are dropped too, so the
+        parent page shows only its loose members while each container links from
+        the toctree as a separate file.
         """
+        visible = self._visible_children(symbol)
+        if self._class_scope:
+            return [c for c in visible if not self._has_own_page(c)]
+        return visible
+
+    def _visible_children(self, symbol: Symbol) -> list[Symbol]:
+        """Return the visible direct children of ``symbol`` (ignoring class scope)."""
         return [c for c in self.store.children(symbol.usr) if self._visible(c)]
+
+    def _has_own_page(self, symbol: Symbol) -> bool:
+        """Whether ``symbol`` gets its own file under ``group_by="class"``.
+
+        A container kind (namespace, class, struct, union, class template) earns
+        a page once it has at least one visible child; leaf members and empty
+        containers stay inline in their parent's page.
+        """
+        if symbol.kind not in _CONTAINER_KINDS:
+            return False
+        cached = self._page_worthy_cache.get(symbol.usr)
+        if cached is not None:
+            return cached
+        result = bool(self._visible_children(symbol))
+        self._page_worthy_cache[symbol.usr] = result
+        return result
 
     def roots(self) -> list[Symbol]:
         """Return the visible top-level symbols of the database."""
@@ -508,14 +555,21 @@ class Generator:
         r"""Render every page in memory without writing, in toctree order.
 
         ``group_by`` selects the page partitioning: ``"symbol"`` yields one page
-        per top-level symbol, ``"file"`` one page per parsed source file. Pages
-        for any Doxygen ``\defgroup`` groups are appended after the symbol/file
-        pages; when there are no groups nothing is appended, so output for
-        group-free projects is unchanged. The caller decides how (and whether)
-        to persist each :class:`RenderedPage`, which is what lets the
+        per top-level symbol, ``"file"`` one page per parsed source file, and
+        ``"class"`` one page per namespace/record container (splitting a
+        single-namespace API into a page per class instead of one giant page).
+        Pages for any Doxygen ``\defgroup`` groups are appended after the
+        symbol/file/class pages; when there are no groups nothing is appended, so
+        output for group-free projects is unchanged. The caller decides how (and
+        whether) to persist each :class:`RenderedPage`, which is what lets the
         incremental pipeline skip unchanged outputs.
         """
-        pages = self._render_file_pages() if group_by == "file" else self._render_symbol_pages()
+        if group_by == "file":
+            pages = self._render_file_pages()
+        elif group_by == "class":
+            pages = self._render_class_pages()
+        else:
+            pages = self._render_symbol_pages()
         return pages + self._render_group_pages()
 
     def render_index(
@@ -563,6 +617,38 @@ class Generator:
             stem = self._unique_stem(_slug(root.qualified_name or root.spelling), seen)
             pages.append(RenderedPage(stem, root.qualified_name or root.spelling, self.render_symbol(root, level=1)))
         return pages
+
+    def _render_class_pages(self) -> list[RenderedPage]:
+        """Render one page per namespace/record container, splitting deep scopes.
+
+        ``group_by="symbol"`` stops at root symbols, so an API that lives entirely
+        in one namespace collapses into a single colossal page that Sphinx's C++
+        domain must resolve in one serial pass. This mode recurses through every
+        container that earns its own page (a namespace or record with documented
+        members, see :meth:`_has_own_page`): each becomes a separate file holding
+        only its loose members, and its nested containers are split out in turn.
+        Leaf roots (a free function or variable at global scope) render exactly as
+        in symbol mode, so a flat global API is unaffected.
+        """
+        pages: list[RenderedPage] = []
+        seen: set[str] = set()
+        previous = self._class_scope
+        self._class_scope = True
+        try:
+            for root in self.roots():
+                self._emit_class_page(root, pages, seen)
+        finally:
+            self._class_scope = previous
+        return pages
+
+    def _emit_class_page(self, symbol: Symbol, pages: list[RenderedPage], seen: set[str]) -> None:
+        """Emit ``symbol``'s page (loose members only), then recurse its containers."""
+        label = symbol.qualified_name or symbol.spelling
+        stem = self._unique_stem(_slug(label), seen)
+        pages.append(RenderedPage(stem, label, self.render_symbol(symbol, level=1)))
+        for child in self._visible_children(symbol):
+            if self._has_own_page(child):
+                self._emit_class_page(child, pages, seen)
 
     def _render_file_pages(self) -> list[RenderedPage]:
         """Render one page per parsed source file that declares any symbol.

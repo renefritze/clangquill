@@ -65,6 +65,10 @@ def test_validate_rejects_unknown_group_by():
         Config(input=["a.hpp"], group_by="nonsense").validate()
 
 
+def test_validate_accepts_class_group_by():
+    assert Config(input=["a.hpp"], group_by="class").validate().group_by == "class"
+
+
 def test_validate_rejects_bad_maxdepth():
     with pytest.raises(ConfigError, match="toctree_maxdepth"):
         Config(input=["a.hpp"], toctree_maxdepth=0).validate()
