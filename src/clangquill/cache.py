@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 # Bump when the cache schema/semantics below change incompatibly; a mismatch
 # transparently discards the old cache and forces a full rebuild.
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -40,10 +40,15 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 -- Every file the last parse touched (the inputs plus their transitive
--- #include dependencies), with the content hash it had at parse time.
+-- #include dependencies), with the content hash it had at parse time and the
+-- (mtime_ns, size_bytes) metadata used as a fast-path to skip re-hashing a file
+-- whose stat() is unchanged. The metadata columns are nullable: a file that
+-- could not be stat'd at record time stores NULL and always takes the hash path.
 CREATE TABLE IF NOT EXISTS inputs (
-  path   TEXT PRIMARY KEY,
-  sha256 TEXT NOT NULL
+  path       TEXT PRIMARY KEY,
+  sha256     TEXT NOT NULL,
+  mtime_ns   INTEGER,
+  size_bytes INTEGER
 );
 
 -- Every page the last render wrote, with the hash of its rendered content.
@@ -169,29 +174,54 @@ class BuildCache:
         """Whether the cached parse still matches the inputs.
 
         ``True`` only when the configuration fingerprint is unchanged *and*
-        every tracked file still exists with the same content hash. Any added,
+        every tracked file still exists with the same content. Any added,
         removed, or edited dependency makes the cached IR stale.
+
+        A file whose ``(st_mtime_ns, st_size)`` is unchanged from parse time is
+        assumed identical and the SHA-256 read is skipped — the same fast-path
+        ``make`` uses. The hash is still computed (and compared) for any file
+        whose metadata moved, so a touched-but-identical file is correctly
+        recognised as unchanged and a byte-edit that preserved the metadata
+        would still be caught on the next metadata change.
         """
         if self.parse_fingerprint != parse_fingerprint:
             return False
-        tracked = self.tracked_files()
-        if not tracked:
+        rows = self._con.execute("SELECT path, sha256, mtime_ns, size_bytes FROM inputs").fetchall()
+        if not rows:
             return False
-        for path, sha in tracked.items():
+        for row in rows:
+            path = row["path"]
             try:
-                if file_sha256(path) != sha:
+                stat = Path(path).stat()
+            except OSError:
+                return False
+            if (
+                row["mtime_ns"] is not None
+                and row["size_bytes"] is not None
+                and stat.st_mtime_ns == row["mtime_ns"]
+                and stat.st_size == row["size_bytes"]
+            ):
+                continue  # metadata unchanged — skip the hash read
+            try:
+                if file_sha256(path) != row["sha256"]:
                     return False
             except OSError:
                 return False
         return True
 
     def record_parse(self, parse_fingerprint: str, files: Mapping[str, str]) -> None:
-        """Persist the fingerprint and ``{path: sha256}`` of a fresh parse."""
+        """Persist the fingerprint and ``{path: sha256}`` of a fresh parse.
+
+        Each path is ``stat``'d so the ``(mtime_ns, size_bytes)`` fast-path in
+        :meth:`parse_is_current` can later skip re-hashing unchanged files. A
+        path that cannot be stat'd records ``NULL`` metadata and always falls
+        back to the hash comparison.
+        """
         self._set_meta(_PARSE_FINGERPRINT, parse_fingerprint)
         self._con.execute("DELETE FROM inputs")
         self._con.executemany(
-            "INSERT OR REPLACE INTO inputs(path, sha256) VALUES(?, ?)",
-            list(files.items()),
+            "INSERT OR REPLACE INTO inputs(path, sha256, mtime_ns, size_bytes) VALUES(?, ?, ?, ?)",
+            [(path, sha, *self._stat_metadata(path)) for path, sha in files.items()],
         )
         self._con.commit()
 
@@ -233,6 +263,15 @@ class BuildCache:
         self._set_meta(_RENDER_FINGERPRINT, render_fingerprint)
         self._set_meta(_RENDER_SUMMARY, json.dumps(dict(summary)))
         self._con.commit()
+
+    @staticmethod
+    def _stat_metadata(path: str) -> tuple[int | None, int | None]:
+        """Return ``(mtime_ns, size_bytes)`` for ``path``, or ``(None, None)``."""
+        try:
+            stat = Path(path).stat()
+        except OSError:
+            return (None, None)
+        return (stat.st_mtime_ns, stat.st_size)
 
     # -- output bookkeeping ---------------------------------------------------
 

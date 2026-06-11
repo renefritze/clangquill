@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
+import clangquill.cache as cache_module
 from clangquill.cache import CACHE_VERSION, BuildCache, file_sha256, fingerprint, hash_text
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 
 def test_fingerprint_is_order_independent_but_value_sensitive() -> None:
@@ -40,6 +44,42 @@ def test_parse_is_current_tracks_configuration_and_contents(tmp_path: Path) -> N
 
         # A vanished dependency also invalidates it.
         header.unlink()
+        assert not cache.parse_is_current("fp-1")
+
+
+def test_parse_is_current_skips_hash_when_metadata_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    header = tmp_path / "a.hpp"
+    header.write_text("one", encoding="utf-8")
+    with BuildCache.open(tmp_path / "cache") as cache:
+        cache.record_parse("fp-1", {str(header): file_sha256(header)})
+
+        # With (mtime_ns, size_bytes) unchanged the fast-path must avoid reading
+        # the file at all: a hash that explodes proves it is never called.
+        def explode(_path: object) -> str:
+            msg = "file_sha256 must not run when metadata is unchanged"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr(cache_module, "file_sha256", explode)
+        assert cache.parse_is_current("fp-1")
+
+
+def test_parse_is_current_falls_back_to_hash_when_only_mtime_changes(tmp_path: Path) -> None:
+    header = tmp_path / "a.hpp"
+    header.write_text("one", encoding="utf-8")
+    with BuildCache.open(tmp_path / "cache") as cache:
+        cache.record_parse("fp-1", {str(header): file_sha256(header)})
+
+        # A touched-but-identical file (new mtime, same bytes) defeats the
+        # fast-path, but the hash comparison still recognises it as unchanged.
+        stat = header.stat()
+        os.utime(header, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+        assert cache.parse_is_current("fp-1")
+
+        # Same-size edit (3 bytes -> 3 bytes) still invalidates via the hash.
+        header.write_text("two", encoding="utf-8")
         assert not cache.parse_is_current("fp-1")
 
 
