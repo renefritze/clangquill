@@ -10,6 +10,13 @@ from typer.testing import CliRunner
 from clangquill import _core, cli, pipeline
 from clangquill.config import Config
 from clangquill.pipeline import MANIFEST_NAME, build
+from clangquill.store import Store
+
+
+def _store_symbols(db_path: Path) -> list[object]:
+    with Store.open(db_path) as store:
+        return store.symbols()
+
 
 requires_libclang = pytest.mark.skipif(
     not _core.have_libclang(),
@@ -212,6 +219,165 @@ def test_incremental_touch_header_regenerates_only_affected(project: Path) -> No
     assert after["alpha.md"] != before["alpha.md"]
     assert after["beta.md"] == before["beta.md"]
     assert after["index.md"] == before["index.md"]
+
+
+@requires_libclang
+def test_incremental_reparses_only_the_changed_translation_unit(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (project / "alpha.hpp").write_text("/// alpha ns\nnamespace alpha { /// f\nint f(); }\n")
+    (project / "beta.hpp").write_text("/// beta ns\nnamespace beta { /// g\nint g(); }\n")
+    config = Config(input=["alpha.hpp", "beta.hpp"], output_dir="api", cache_dir=".cache")
+    build(config, base_dir=project)
+
+    # Spy on the two parse entry points to prove the incremental rebuild takes
+    # the per-TU path for exactly the touched input and never re-parses the world.
+    full_calls = 0
+    tu_calls: list[str] = []
+    real_full = _core.parse_to_sqlite
+    real_tu = _core.parse_tu_to_sqlite
+
+    def spy_full(inputs: list[str], db: str, opt: object) -> object:
+        nonlocal full_calls
+        full_calls += 1
+        return real_full(inputs, db, opt)
+
+    def spy_tu(inp: str, db: str, opt: object) -> object:
+        tu_calls.append(Path(inp).name)
+        return real_tu(inp, db, opt)
+
+    monkeypatch.setattr(_core, "parse_to_sqlite", spy_full)
+    monkeypatch.setattr(_core, "parse_tu_to_sqlite", spy_tu)
+
+    (project / "alpha.hpp").write_text("/// alpha ns edited\nnamespace alpha { /// f\nint f(); }\n")
+    result = build(config, base_dir=project)
+
+    assert result.parsed
+    assert full_calls == 0  # no whole-module rebuild
+    assert tu_calls == ["alpha.hpp"]  # only the touched TU re-parsed
+    assert result.pages_written == ["alpha.md"]
+
+
+@requires_libclang
+def test_incremental_shared_header_change_reparses_every_dependent(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A header shared by two inputs: editing it must re-parse *both* translation
+    # units that include it (not just one), and leave the IR consistent.
+    (project / "shared.hpp").write_text("#pragma once\nusing Id = int;\n")
+    (project / "alpha.hpp").write_text('#include "shared.hpp"\n/// a\nnamespace a { /// f\nId f(); }\n')
+    (project / "beta.hpp").write_text('#include "shared.hpp"\n/// b\nnamespace b { /// g\nId g(); }\n')
+    config = Config(input=["alpha.hpp", "beta.hpp"], output_dir="api", cache_dir=".cache")
+    build(config, base_dir=project)
+
+    full_calls = 0
+    tu_calls: list[str] = []
+    real_full = _core.parse_to_sqlite
+    real_tu = _core.parse_tu_to_sqlite
+
+    def spy_full(inputs: list[str], db: str, opt: object) -> object:
+        nonlocal full_calls
+        full_calls += 1
+        return real_full(inputs, db, opt)
+
+    def spy_tu(inp: str, db: str, opt: object) -> object:
+        tu_calls.append(Path(inp).name)
+        return real_tu(inp, db, opt)
+
+    monkeypatch.setattr(_core, "parse_to_sqlite", spy_full)
+    monkeypatch.setattr(_core, "parse_tu_to_sqlite", spy_tu)
+
+    (project / "shared.hpp").write_text("#pragma once\nusing Id = unsigned long;\n")
+    result = build(config, base_dir=project)
+
+    assert result.parsed
+    assert full_calls == 0  # still no whole-module rebuild
+    # Both dependents re-parsed via the per-TU path; the order follows the inputs.
+    assert tu_calls == ["alpha.hpp", "beta.hpp"]
+    # The IR is consistent: no symbol was lost across the partial re-parse.
+    assert {"a", "b"}.issubset({s.qualified_name for s in _store_symbols(result.db_path)})
+
+
+@requires_libclang
+def test_incremental_partial_parse_failure_is_atomic(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Two stale inputs where the second re-parse fails: the IR must not be left
+    # half-updated, and the cache must still describe the pre-build state so the
+    # next run retries cleanly rather than trusting a torn IR.
+    (project / "alpha.hpp").write_text("/// alpha ns\nnamespace alpha { /// f\nint f(); }\n")
+    (project / "beta.hpp").write_text("/// beta ns\nnamespace beta { /// g\nint g(); }\n")
+    config = Config(input=["alpha.hpp", "beta.hpp"], output_dir="api", cache_dir=".cache")
+    build(config, base_dir=project)
+
+    ir = project / ".cache" / pipeline.IR_NAME
+    ir_before = ir.read_bytes()
+
+    # Edit both inputs so both are stale, then make the second per-TU parse blow up.
+    (project / "alpha.hpp").write_text("/// alpha ns edit\nnamespace alpha { /// f\nint f(); }\n")
+    (project / "beta.hpp").write_text("/// beta ns edit\nnamespace beta { /// g\nint g(); }\n")
+
+    real_tu = _core.parse_tu_to_sqlite
+    calls = 0
+
+    def flaky_tu(inp: str, db: str, opt: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 2:  # fail on the second stale TU, after the first committed
+            msg = "boom"
+            raise RuntimeError(msg)
+        return real_tu(inp, db, opt)
+
+    monkeypatch.setattr(_core, "parse_tu_to_sqlite", flaky_tu)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        build(config, base_dir=project)
+
+    # The staged copy was discarded: the on-disk IR is byte-for-byte unchanged.
+    assert ir.read_bytes() == ir_before
+    # Sanity: the staged temp DB was cleaned up, not left lingering.
+    assert not list((project / ".cache").glob("tmp*.sqlite"))
+
+    # With the patch removed, the next build recovers and re-parses both inputs.
+    monkeypatch.undo()
+    recovered = build(config, base_dir=project)
+    assert recovered.parsed
+    assert {"alpha.md", "beta.md"}.issubset(set(recovered.pages_written))
+
+
+@requires_libclang
+def test_render_failure_after_reparse_does_not_noop_next_run(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # If rendering crashes after the parse pointer advanced, the next build must
+    # still regenerate docs for the new IR rather than trust a stale render
+    # summary and noop-skip it.
+    config = Config(input=["demo.hpp"], output_dir="api", cache_dir=".cache")
+    build(config, base_dir=project)
+
+    # Edit the source so the next build re-parses, then make rendering blow up
+    # *after* the parse has been recorded.
+    (project / "demo.hpp").write_text(FIXTURE.replace("documented namespace", "documented namespace edited"))
+
+    def boom(*_args: object, **_kwargs: object) -> list[tuple[str, str]]:
+        msg = "render exploded"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(pipeline, "_rendered_files", boom)
+    with pytest.raises(RuntimeError, match="render exploded"):
+        build(config, base_dir=project)
+
+    # Recover: rendering works again. The parse is now cache-current, but the
+    # render bookkeeping was invalidated, so this must NOT noop — it must render.
+    monkeypatch.undo()
+    recovered = build(config, base_dir=project)
+    assert not recovered.parsed  # parse served from cache (IR already updated)
+    assert "demo.md" in recovered.pages_written  # but docs were regenerated
+    assert "namespace edited" in (project / "api" / "demo.md").read_text()
 
 
 @requires_libclang

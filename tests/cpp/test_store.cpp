@@ -137,6 +137,107 @@ TEST_CASE("SqliteStore write/read round-trips the IR", "[store]") {
   std::remove(path.c_str());
 }
 
+TEST_CASE("SqliteStore write_tu replaces only the re-parsed file's rows",
+          "[store]") {
+  // Two files in the IR: one to re-parse, one that must survive untouched.
+  model::ParsedModule original;
+
+  model::SourceFile a;
+  a.path = "/tmp/a.hpp";
+  a.sha256 = std::string(64, 'a');
+  a.size_bytes = 1;
+  original.files.push_back(a);
+
+  model::SourceFile b;
+  b.path = "/tmp/b.hpp";
+  b.sha256 = std::string(64, 'b');
+  b.size_bytes = 2;
+  original.files.push_back(b);
+
+  model::Symbol af;
+  af.usr = "c:@F@a_old";
+  af.kind = model::SymbolKind::Function;
+  af.spelling = "a_old";
+  af.qualified_name = "a_old";
+  af.display_name = "a_old()";
+  af.location.file_path = "/tmp/a.hpp";
+  original.symbols.push_back(af);
+
+  model::FunctionParameter ap;
+  ap.function_usr = "c:@F@a_old";
+  ap.index = 0;
+  ap.name = "x";
+  ap.type_repr = "int";
+  original.parameters.push_back(ap);
+
+  model::Symbol bf;
+  bf.usr = "c:@F@b_keep";
+  bf.kind = model::SymbolKind::Function;
+  bf.spelling = "b_keep";
+  bf.qualified_name = "b_keep";
+  bf.display_name = "b_keep()";
+  bf.location.file_path = "/tmp/b.hpp";
+  original.symbols.push_back(bf);
+
+  std::string path = temp_db_path();
+  {
+    store::SqliteStore writer(path);
+    writer.write(original, store::Meta::current());
+  }
+
+  // Re-parse a.hpp: its old symbol is dropped and a new one takes its place,
+  // with a refreshed file hash. b.hpp is not part of this module at all.
+  model::ParsedModule reparse;
+  model::SourceFile a2;
+  a2.path = "/tmp/a.hpp";
+  a2.sha256 = std::string(64, 'c');
+  a2.size_bytes = 9;
+  reparse.files.push_back(a2);
+
+  model::Symbol an;
+  an.usr = "c:@F@a_new";
+  an.kind = model::SymbolKind::Function;
+  an.spelling = "a_new";
+  an.qualified_name = "a_new";
+  an.display_name = "a_new()";
+  an.location.file_path = "/tmp/a.hpp";
+  reparse.symbols.push_back(an);
+
+  {
+    store::SqliteStore writer(path);
+    REQUIRE_NOTHROW(writer.write_tu(reparse, store::Meta::current()));
+  }
+
+  store::SqliteStore reader(path);
+  model::ParsedModule got = reader.read();
+
+  // a.hpp's symbol was replaced; its stale parameter row cascaded away.
+  bool has_a_old = false;
+  bool has_a_new = false;
+  bool has_b = false;
+  for (const auto& s : got.symbols) {
+    if (s.usr == "c:@F@a_old") has_a_old = true;
+    if (s.usr == "c:@F@a_new") has_a_new = true;
+    if (s.usr == "c:@F@b_keep") has_b = true;
+  }
+  CHECK_FALSE(has_a_old);
+  CHECK(has_a_new);
+  CHECK(has_b);  // the untouched file's symbol survived
+  CHECK(got.parameters.empty());
+
+  // a.hpp kept its id but refreshed its hash; b.hpp is unchanged.
+  REQUIRE(got.files.size() == 2);
+  for (const auto& f : got.files) {
+    if (f.path == "/tmp/a.hpp") {
+      CHECK(f.sha256 == std::string(64, 'c'));
+      CHECK(f.size_bytes == 9);
+    }
+    if (f.path == "/tmp/b.hpp") CHECK(f.sha256 == std::string(64, 'b'));
+  }
+
+  std::remove(path.c_str());
+}
+
 TEST_CASE("SqliteStore tolerates a symbol seen in multiple translation units",
           "[store]") {
   model::ParsedModule m;

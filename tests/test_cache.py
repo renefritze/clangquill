@@ -7,7 +7,7 @@ import sqlite3
 from typing import TYPE_CHECKING
 
 import clangquill.cache as cache_module
-from clangquill.cache import CACHE_VERSION, BuildCache, file_sha256, fingerprint, hash_text
+from clangquill.cache import CACHE_VERSION, BuildCache, ParseStatus, file_sha256, fingerprint, hash_text
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -109,6 +109,66 @@ def test_parse_is_current_false_without_tracked_files(tmp_path: Path) -> None:
     with BuildCache.open(tmp_path / "cache") as cache:
         cache.record_parse("fp", {})
         assert not cache.parse_is_current("fp")
+
+
+def test_parse_status_narrows_to_the_changed_translation_unit(tmp_path: Path) -> None:
+    a = tmp_path / "a.hpp"
+    a.write_text("a", encoding="utf-8")
+    b = tmp_path / "b.hpp"
+    b.write_text("b", encoding="utf-8")
+    shared = tmp_path / "shared.hpp"
+    shared.write_text("s", encoding="utf-8")
+    files = {str(a): _entry(a), str(b): _entry(b), str(shared): _entry(shared)}
+    # Both a and b include shared.hpp; a additionally has its own leaf content.
+    tu_deps = {str(a): [str(a), str(shared)], str(b): [str(b), str(shared)]}
+
+    with BuildCache.open(tmp_path / "cache") as cache:
+        cache.record_parse("fp", files, tu_deps)
+
+        # Nothing changed -> fully current.
+        assert cache.parse_status("fp") == ParseStatus(current=True)
+        # A different configuration fingerprint forces a full rebuild.
+        assert cache.parse_status("fp2") == ParseStatus(current=False, stale_inputs=None)
+
+        # Editing a leaf header marks only that input stale.
+        a.write_text("a-edited", encoding="utf-8")
+        assert cache.parse_status("fp") == ParseStatus(current=False, stale_inputs=frozenset({str(a)}))
+
+        # Editing the shared header marks *every* input that includes it stale.
+        a.write_text("a", encoding="utf-8")
+        shared.write_text("s-edited", encoding="utf-8")
+        assert cache.parse_status("fp") == ParseStatus(current=False, stale_inputs=frozenset({str(a), str(b)}))
+
+
+def test_parse_status_without_tu_map_falls_back_to_full(tmp_path: Path) -> None:
+    header = tmp_path / "a.hpp"
+    header.write_text("one", encoding="utf-8")
+    with BuildCache.open(tmp_path / "cache") as cache:
+        # Recorded without per-TU attribution (tu_deps omitted).
+        cache.record_parse("fp", {str(header): _entry(header)})
+        header.write_text("two", encoding="utf-8")
+        # No map to narrow with -> rebuild everything.
+        assert cache.parse_status("fp") == ParseStatus(current=False, stale_inputs=None)
+
+
+def test_record_partial_parse_updates_map_and_prunes_orphans(tmp_path: Path) -> None:
+    a = tmp_path / "a.hpp"
+    shared = tmp_path / "shared.hpp"
+    for p in (a, shared):
+        p.write_text(p.name, encoding="utf-8")
+    files = {str(a): _entry(a), str(shared): _entry(shared)}
+
+    with BuildCache.open(tmp_path / "cache") as cache:
+        cache.record_parse("fp", files, {str(a): [str(a), str(shared)]})
+
+        # a no longer includes shared.hpp; its fresh dep set drops it.
+        cache.record_partial_parse({str(a): [str(a)]}, files)
+
+        # shared.hpp is orphaned (no input references it) and pruned from inputs.
+        assert set(cache.tracked_files()) == {str(a)}
+        assert cache.tu_inputs() == {str(a): {str(a)}}
+        # The fingerprint is unchanged across a partial update.
+        assert cache.parse_fingerprint == "fp"
 
 
 def test_outputs_round_trip_and_replacement(tmp_path: Path) -> None:

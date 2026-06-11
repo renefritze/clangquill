@@ -15,11 +15,12 @@ write, and symbols that disappear have their pages deleted. A *fully* unchanged
 build (cache-hit parse and unchanged render config/templates) goes one step
 further and skips the Jinja render entirely, returning the previous run's counts
 straight from the cache rather than re-rendering only to discover nothing
-changed. Note the cache is
-currently all-or-nothing on the parse side: touching any input (or transitive
-include) re-parses the whole module — but only the affected pages are
-rewritten. Per-file re-parses are future work (see the per-TU incremental
-issue). Without a cache directory the build is stateless: it always re-parses
+changed. The parse side is *per translation unit*: when the input set and
+compile configuration are unchanged, only the translation units whose files
+actually changed are re-parsed into the existing IR (the rest are reused), so
+touching one header out of many costs roughly one TU parse instead of the whole
+module. A change to the input set or compile configuration still forces a full
+re-parse. Without a cache directory the build is stateless: it always re-parses
 into a throwaway IR, rewrites every page, and prunes stale pages via a
 manifest.
 """
@@ -28,13 +29,14 @@ from __future__ import annotations
 
 import glob
 import json
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clangquill import _core
-from clangquill.cache import BuildCache, file_sha256, fingerprint, hash_text
+from clangquill.cache import BuildCache, ParseStatus, file_sha256, fingerprint, hash_text
 from clangquill.generator import Generator
 from clangquill.store import Store
 
@@ -302,9 +304,12 @@ def _incremental_build(
     ir_path = cache_dir / IR_NAME
     parse_fp = _parse_fingerprint(config, base, inputs)
     render_fp = _render_fingerprint(config, base)
+    options = _parse_options(config, base)
 
     with BuildCache.open(cache_dir) as cache:
-        parsed = not (ir_path.is_file() and cache.parse_is_current(parse_fp))
+        # No IR on disk yet means a full parse regardless of bookkeeping.
+        status = cache.parse_status(parse_fp) if ir_path.is_file() else ParseStatus(current=False)
+        parsed = not status.current
         # Fully unchanged build: the parse came from cache (IR identical) and the
         # render config/templates are unchanged, so the output the last run wrote
         # is already on disk. Skip the store open and every Jinja render — the
@@ -314,13 +319,27 @@ def _incremental_build(
 
         counts: _core.ParseResult | None = None
         diagnostics: list[str] = []
-        if parsed:
-            counts = _parse_into(inputs, ir_path, _parse_options(config, base))
+        partial_deps: dict[str, list[str]] | None = None
+        if not status.current and status.stale_inputs is None:
+            # Configuration changed or no per-TU map: rebuild the whole IR.
+            counts = _parse_into(inputs, ir_path, options)
             diagnostics = list(counts.diagnostics)
+        elif not status.current:
+            # Only some inputs are stale: re-parse just those translation units
+            # into the existing IR, leaving every other TU's rows in place.
+            stale = [inp for inp in inputs if inp in status.stale_inputs]
+            partial_deps, diagnostics = _parse_tus_into(stale, ir_path, options)
 
         with Store.open(ir_path) as store:
-            if parsed:
-                cache.record_parse(parse_fp, {f.path: (f.sha256, f.size_bytes) for f in store.files()})
+            snapshot = {f.path: (f.sha256, f.size_bytes) for f in store.files()}
+            # Both record_* calls invalidate the previous render bookkeeping in
+            # the same transaction that advances the parse, so a failure before
+            # record_render below can never let the next run noop-skip rendering
+            # against this new IR; a clean render re-establishes it at the end.
+            if partial_deps is not None:
+                cache.record_partial_parse(partial_deps, snapshot)
+            elif parsed:
+                cache.record_parse(parse_fp, snapshot, _tu_deps(counts))
             generator = _make_generator(config, base, store)
             rendered = _rendered_files(generator, config)
             symbol_count = store.symbol_count()
@@ -385,9 +404,9 @@ def _noop_result(output_dir: Path, ir_path: Path, summary: dict[str, object] | N
 def _parse_into(inputs: list[str], ir_path: Path, options: _core.ParseOptions) -> _core.ParseResult:
     """Parse into a sibling temp DB, then atomically replace ``ir_path``.
 
-    The core cannot append to an existing IR (its ``files`` rows are unique), so
-    a fresh database is built next to the target and moved into place only on
-    success; a failed parse leaves any previously cached IR untouched.
+    Used for a *full* rebuild. A fresh database is built next to the target and
+    moved into place only on success; a failed parse leaves any previously cached
+    IR untouched.
     """
     tmp = _new_temp_db(ir_path.parent)
     try:
@@ -397,6 +416,45 @@ def _parse_into(inputs: list[str], ir_path: Path, options: _core.ParseOptions) -
         raise
     tmp.replace(ir_path)
     return result
+
+
+def _tu_deps(result: _core.ParseResult | None) -> dict[str, list[str]]:
+    """Extract the ``{input: [dependency, ...]}`` map from a parse result."""
+    if result is None:
+        return {}
+    return {tu.input: list(tu.files) for tu in result.translation_units}
+
+
+def _parse_tus_into(
+    stale: list[str],
+    ir_path: Path,
+    options: _core.ParseOptions,
+) -> tuple[dict[str, list[str]], list[str]]:
+    """Re-parse each stale input, replacing only its rows, atomically.
+
+    Each per-TU writer call replaces just one translation unit's rows (reusing
+    every other TU's), but the set of stale inputs must land all-or-nothing: if a
+    later TU failed after an earlier one was committed, the IR would be
+    half-updated while the cache still describes the old state. So the re-parses
+    run against a staged copy of ``ir_path`` that replaces the original only once
+    every stale input has succeeded; on any failure the original IR (and the
+    cache, which is only updated afterwards) is left untouched, forcing a clean
+    rebuild next run. Returns the fresh dependency map and the diagnostics.
+    """
+    staged = _new_temp_db(ir_path.parent)
+    try:
+        shutil.copyfile(ir_path, staged)
+        deps: dict[str, list[str]] = {}
+        diagnostics: list[str] = []
+        for inp in stale:
+            result = _core.parse_tu_to_sqlite(inp, str(staged), options)
+            deps.update(_tu_deps(result))
+            diagnostics.extend(result.diagnostics)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+    staged.replace(ir_path)
+    return deps, diagnostics
 
 
 def _apply_outputs(

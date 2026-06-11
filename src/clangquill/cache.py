@@ -23,15 +23,20 @@ import hashlib
 import json
 import sqlite3
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Iterable, Iterator, Mapping
 
 # Bump when the cache schema/semantics below change incompatibly; a mismatch
 # transparently discards the old cache and forces a full rebuild.
-CACHE_VERSION = 2
+#
+# v2 added the ``(mtime_ns, size_bytes)`` fast-path columns on ``inputs``; v3
+# adds the ``tu_inputs`` table so the cache can attribute each tracked file to
+# the input(s) that #include it, enabling per-TU incremental re-parses.
+CACHE_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -50,6 +55,17 @@ CREATE TABLE IF NOT EXISTS inputs (
   mtime_ns   INTEGER,
   size_bytes INTEGER
 );
+
+-- Which input translation unit each tracked dependency belongs to: one row per
+-- (input, dependency) edge. A dependency #included by several inputs has several
+-- rows. When a dependency changes, the inputs joined to it here are the exact
+-- translation units that must be re-parsed.
+CREATE TABLE IF NOT EXISTS tu_inputs (
+  input_path TEXT NOT NULL,
+  dep_path   TEXT NOT NULL,
+  PRIMARY KEY (input_path, dep_path)
+);
+CREATE INDEX IF NOT EXISTS idx_tu_inputs_dep ON tu_inputs(dep_path);
 
 -- Every page the last render wrote, with the hash of its rendered content.
 CREATE TABLE IF NOT EXISTS outputs (
@@ -96,6 +112,24 @@ def fingerprint(payload: Mapping[str, object]) -> str:
     """
     blob = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hash_text(blob)
+
+
+@dataclass(frozen=True)
+class ParseStatus:
+    """How much of the cached parse a rebuild can reuse.
+
+    Exactly one of three shapes:
+
+    * ``current=True`` — every tracked file is unchanged; reuse the IR as-is.
+    * ``current=False, stale_inputs=None`` — the parse configuration changed (or
+      no usable per-TU map exists); the whole module must be re-parsed.
+    * ``current=False, stale_inputs={...}`` — only those inputs' dependency sets
+      changed; re-parse just those translation units into the existing IR.
+    """
+
+    current: bool
+    #: Inputs whose dependencies changed (``None`` means "re-parse everything").
+    stale_inputs: frozenset[str] | None = None
 
 
 class BuildCache:
@@ -163,7 +197,8 @@ class BuildCache:
         upgraded write fail. Dropping forces the current :data:`_SCHEMA`.
         """
         self._con.executescript(
-            "DROP TABLE IF EXISTS meta;DROP TABLE IF EXISTS inputs;DROP TABLE IF EXISTS outputs;",
+            "DROP TABLE IF EXISTS meta;DROP TABLE IF EXISTS inputs;"
+            "DROP TABLE IF EXISTS tu_inputs;DROP TABLE IF EXISTS outputs;",
         )
         self._con.executescript(_SCHEMA)
 
@@ -178,36 +213,28 @@ class BuildCache:
         """Return ``{path: sha256}`` for every file the cached parse touched."""
         return {row["path"]: row["sha256"] for row in self._con.execute("SELECT path, sha256 FROM inputs")}
 
-    def parse_is_current(self, parse_fingerprint: str) -> bool:
-        """Whether the cached parse still matches the inputs.
+    def _scan_inputs(self) -> set[str]:
+        """Return tracked files whose content no longer matches the cache.
 
-        ``True`` only when the configuration fingerprint is unchanged *and*
-        every tracked file still exists with the same content. Any added,
-        removed, or edited dependency makes the cached IR stale.
-
-        A file whose ``(st_mtime_ns, st_size)`` is unchanged from parse time is
-        assumed identical and the SHA-256 read is skipped — the same fast-path
-        ``make`` uses. The hash is still computed (and compared) for any file
-        whose metadata moved, so a touched-but-identical file is correctly
-        recognised as unchanged and a byte-edit that preserved the metadata
-        would still be caught on the next metadata change.
-
-        When the hash confirms a metadata-mismatched file is in fact unchanged,
-        its stored metadata is refreshed to the current ``stat`` so a mere
-        ``touch`` is paid for once rather than re-hashed on every later noop.
+        Each file is checked with the ``(st_mtime_ns, st_size)`` fast-path the
+        same way ``make`` does: a file whose metadata is unchanged from parse
+        time is assumed identical and its SHA-256 read is skipped. The hash is
+        still computed for any file whose metadata moved, so a touched-but-
+        identical file is correctly recognised as unchanged. When the hash
+        confirms such a file is unchanged, its stored metadata is healed to the
+        current ``stat`` so a mere ``touch`` is paid for once rather than
+        re-hashed on every later build.
         """
-        if self.parse_fingerprint != parse_fingerprint:
-            return False
-        rows = self._con.execute("SELECT path, sha256, mtime_ns, size_bytes FROM inputs").fetchall()
-        if not rows:
-            return False
+        changed: set[str] = set()
         refreshed: list[tuple[int, int, str]] = []
+        rows = self._con.execute("SELECT path, sha256, mtime_ns, size_bytes FROM inputs").fetchall()
         for row in rows:
             path = row["path"]
             try:
                 stat = Path(path).stat()
             except OSError:
-                return False
+                changed.add(path)
+                continue
             if (
                 row["mtime_ns"] is not None
                 and row["size_bytes"] is not None
@@ -217,9 +244,11 @@ class BuildCache:
                 continue  # metadata unchanged — skip the hash read
             try:
                 if file_sha256(path) != row["sha256"]:
-                    return False
+                    changed.add(path)
+                    continue
             except OSError:
-                return False
+                changed.add(path)
+                continue
             # Same content, moved metadata: heal the fast-path for next time.
             refreshed.append((stat.st_mtime_ns, stat.st_size, path))
         if refreshed:
@@ -228,19 +257,87 @@ class BuildCache:
                 refreshed,
             )
             self._con.commit()
-        return True
+        return changed
 
-    def record_parse(self, parse_fingerprint: str, files: Mapping[str, tuple[str, int]]) -> None:
-        """Persist the fingerprint and per-file ``(sha256, size_bytes)`` of a parse.
+    def parse_is_current(self, parse_fingerprint: str) -> bool:
+        """Whether the cached parse still matches the inputs.
 
-        ``size_bytes`` comes from the parse snapshot (the same observation the
-        hash was computed from), so it cannot drift from the stored hash. Each
-        path is additionally ``stat``'d here for its ``mtime_ns`` to complete
-        the ``(mtime_ns, size_bytes)`` fast-path in :meth:`parse_is_current`. A
-        path that cannot be stat'd records ``NULL`` mtime and always falls back
-        to the hash comparison. The only residual gap is a same-size edit landing
-        between the parse hash and this ``stat`` — the narrow ``make``-style
-        timestamp race the fast-path is documented to accept.
+        ``True`` only when the configuration fingerprint is unchanged *and*
+        every tracked file still exists with the same content. Any added,
+        removed, or edited dependency makes the cached IR stale. Change detection
+        uses the ``(mtime_ns, size_bytes)`` fast-path described on
+        :meth:`_scan_inputs`.
+        """
+        if self.parse_fingerprint != parse_fingerprint:
+            return False
+        if not self.tracked_files():
+            return False
+        return not self._scan_inputs()
+
+    def tu_inputs(self) -> dict[str, set[str]]:
+        """Return ``{dep_path: {input_path, ...}}`` from the cached parse."""
+        mapping: dict[str, set[str]] = {}
+        for row in self._con.execute("SELECT input_path, dep_path FROM tu_inputs"):
+            mapping.setdefault(row["dep_path"], set()).add(row["input_path"])
+        return mapping
+
+    def parse_status(self, parse_fingerprint: str) -> ParseStatus:
+        """Classify how much of the cached parse a rebuild can reuse.
+
+        See :class:`ParseStatus`. The configuration fingerprint already covers
+        the resolved input set and compile args, so when it matches we know the
+        inputs are the same and only file *contents* can differ — which lets us
+        narrow the rebuild to the translation units that actually changed.
+        """
+        if self.parse_fingerprint != parse_fingerprint:
+            return ParseStatus(current=False, stale_inputs=None)
+        if not self.tracked_files():
+            return ParseStatus(current=False, stale_inputs=None)
+        changed = self._scan_inputs()
+        if not changed:
+            return ParseStatus(current=True)
+        tu_map = self.tu_inputs()
+        if not tu_map:
+            # A parse recorded without per-TU attribution: fall back to a full
+            # rebuild rather than guess which inputs are affected.
+            return ParseStatus(current=False, stale_inputs=None)
+        stale: set[str] = set()
+        for dep in changed:
+            inputs_for_dep = tu_map.get(dep)
+            if inputs_for_dep is None:
+                # A changed file we cannot attribute to any input (should not
+                # happen while the table is consistent): be safe, rebuild all.
+                return ParseStatus(current=False, stale_inputs=None)
+            stale |= inputs_for_dep
+        return ParseStatus(current=False, stale_inputs=frozenset(stale))
+
+    def _write_tu_inputs(self, tu_deps: Mapping[str, Iterable[str]]) -> None:
+        """Replace the ``tu_inputs`` rows for each input in ``tu_deps``."""
+        for input_path, deps in tu_deps.items():
+            self._con.execute("DELETE FROM tu_inputs WHERE input_path = ?", (input_path,))
+            self._con.executemany(
+                "INSERT OR REPLACE INTO tu_inputs(input_path, dep_path) VALUES(?, ?)",
+                [(input_path, dep) for dep in deps],
+            )
+
+    def record_parse(
+        self,
+        parse_fingerprint: str,
+        files: Mapping[str, tuple[str, int]],
+        tu_deps: Mapping[str, Iterable[str]] | None = None,
+    ) -> None:
+        """Persist the fingerprint, per-file snapshot and per-TU map of a parse.
+
+        ``files`` maps each path to its ``(sha256, size_bytes)`` parse snapshot
+        (the same observation the hash was computed from, so size cannot drift
+        from the stored hash). Each path is additionally ``stat``'d here for its
+        ``mtime_ns`` to complete the ``(mtime_ns, size_bytes)`` fast-path in
+        :meth:`parse_is_current`; a path that cannot be stat'd records ``NULL``
+        mtime and always falls back to the hash comparison.
+
+        ``tu_deps`` maps each input to the files its translation unit pulled in;
+        without it the per-TU map is left empty and future rebuilds fall back to
+        a full re-parse on any change.
         """
         self._set_meta(_PARSE_FINGERPRINT, parse_fingerprint)
         self._con.execute("DELETE FROM inputs")
@@ -248,6 +345,38 @@ class BuildCache:
             "INSERT OR REPLACE INTO inputs(path, sha256, mtime_ns, size_bytes) VALUES(?, ?, ?, ?)",
             [(path, sha, self._mtime_ns(path), size) for path, (sha, size) in files.items()],
         )
+        self._con.execute("DELETE FROM tu_inputs")
+        if tu_deps:
+            self._write_tu_inputs(tu_deps)
+        # Advancing the parse invalidates the previous render in the same
+        # transaction, so the noop shortcut can never trust a stale render.
+        self._clear_render_meta()
+        self._con.commit()
+
+    def record_partial_parse(
+        self,
+        tu_deps: Mapping[str, Iterable[str]],
+        files: Mapping[str, tuple[str, int]],
+    ) -> None:
+        """Update the cache after re-parsing only some translation units.
+
+        ``tu_deps`` is the fresh dependency set of each re-parsed input and
+        ``files`` carries the up-to-date ``(sha256, size_bytes)`` snapshot for
+        every file in the IR. The ``inputs`` table is rebuilt from the files
+        still referenced by any translation unit, so a dependency no input
+        includes anymore is dropped. The parse fingerprint is unchanged (the
+        input set/config did not move — only file contents did).
+        """
+        self._write_tu_inputs(tu_deps)
+        referenced = {row["dep_path"] for row in self._con.execute("SELECT dep_path FROM tu_inputs")}
+        self._con.execute("DELETE FROM inputs")
+        self._con.executemany(
+            "INSERT OR REPLACE INTO inputs(path, sha256, mtime_ns, size_bytes) VALUES(?, ?, ?, ?)",
+            [(path, sha, self._mtime_ns(path), size) for path, (sha, size) in files.items() if path in referenced],
+        )
+        # Advancing the parse invalidates the previous render in the same
+        # transaction, so the noop shortcut can never trust a stale render.
+        self._clear_render_meta()
         self._con.commit()
 
     # -- render bookkeeping ---------------------------------------------------
@@ -289,6 +418,17 @@ class BuildCache:
         self._set_meta(_RENDER_SUMMARY, json.dumps(dict(summary)))
         self._con.commit()
 
+    def _clear_render_meta(self) -> None:
+        """Drop the noop-render bookkeeping (the caller's transaction commits it).
+
+        Folded into the parse-recording transaction so the parse pointer and the
+        render invalidation advance atomically: a crash can never leave a current
+        parse paired with a stale render fingerprint/summary that the noop
+        shortcut would wrongly trust against the new IR. A successful render
+        re-records the bookkeeping via :meth:`record_render`.
+        """
+        self._con.execute("DELETE FROM meta WHERE key IN (?, ?)", (_RENDER_FINGERPRINT, _RENDER_SUMMARY))
+
     @staticmethod
     def _mtime_ns(path: str) -> int | None:
         """Return ``st_mtime_ns`` for ``path``, or ``None`` if it cannot be stat'd."""
@@ -319,6 +459,7 @@ class BuildCache:
 __all__ = [
     "CACHE_VERSION",
     "BuildCache",
+    "ParseStatus",
     "file_sha256",
     "fingerprint",
     "hash_text",

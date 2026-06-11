@@ -41,8 +41,14 @@ class Parser {
   /// @brief Parses one input file, appending its IR into @p out.
   /// @param path Path of the translation unit to parse.
   /// @param out Module that extracted rows are appended to.
+  /// @param tu_files Optional sink for this translation unit's full file set
+  ///        (the main file plus every transitively `#include`d file). Unlike
+  ///        @p out.files — which is deduplicated across every TU parsed into the
+  ///        module — this captures exactly what *this* TU pulled in, so a caller
+  ///        can attribute each dependency to the input that requires it.
   /// @return `false` on hard failure (the translation unit could not be created).
-  bool parse_file(const std::string& path, model::ParsedModule& out);
+  bool parse_file(const std::string& path, model::ParsedModule& out,
+                  std::vector<std::string>* tu_files = nullptr);
 
  private:
   std::vector<std::string> build_args(const std::string& path) const;
@@ -63,8 +69,13 @@ class Parser {
 ///
 /// @param inputs Translation units to parse, in the order they should merge.
 /// @param options Parse configuration applied to every file.
+/// @param tu_files Optional sink, sized to and indexed by @p inputs, receiving
+///        each translation unit's full file set (its main file plus every
+///        transitive `#include`). Lets a caller attribute every dependency to
+///        the input that pulled it in for per-TU incremental re-parses.
 /// @return The merged IR for all inputs.
 model::ParsedModule parse_files(const std::vector<std::string>& inputs,
-                                const ParseOptions& options);
+                                const ParseOptions& options,
+                                std::vector<std::vector<std::string>>* tu_files = nullptr);
 
 }  // namespace clangquill::parser
