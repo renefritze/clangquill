@@ -319,7 +319,7 @@ def _incremental_build(
 
         with Store.open(ir_path) as store:
             if parsed:
-                cache.record_parse(parse_fp, {f.path: f.sha256 for f in store.files()})
+                cache.record_parse(parse_fp, {f.path: (f.sha256, f.size_bytes) for f in store.files()})
             generator = _make_generator(config, base, store)
             rendered = _rendered_files(generator, config)
             symbol_count = store.symbol_count()
