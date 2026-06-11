@@ -117,6 +117,10 @@ def build(  # noqa: PLR0913
         typer.Option("--group-by", help=_GROUP_BY_HELP),
     ] = "symbol",
     toctree_maxdepth: Annotated[int, typer.Option("--toctree-maxdepth", help="Generated toctree depth.")] = 2,
+    jobs: Annotated[
+        int,
+        typer.Option("--jobs", "-j", help="Parse threads (0 = auto-detect CPU count, 1 = serial)."),
+    ] = 0,
 ) -> None:
     """Parse C++ inputs and generate MyST Markdown into the output directory."""
     config = Config(
@@ -134,6 +138,7 @@ def build(  # noqa: PLR0913
         comment_parser=comment_parser,
         group_by=group_by,
         toctree_maxdepth=toctree_maxdepth,
+        jobs=jobs,
     )
     try:
         config.validate()

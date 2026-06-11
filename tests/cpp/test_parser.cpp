@@ -1,7 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <set>
 #include <string>
+#include <vector>
 
 #include "model/module.hpp"
 
@@ -143,6 +145,65 @@ TEST_CASE("content_hash is deterministic across parses", "[parser]") {
   };
   CHECK(hash_of(a, "geo::Circle") == hash_of(b, "geo::Circle"));
   CHECK_FALSE(hash_of(a, "geo::Circle").empty());
+}
+
+namespace {
+
+std::vector<std::string> all_inputs() {
+  const std::string dir = CLANGQUILL_FIXTURE_DIR;
+  return {dir + "/shapes.hpp", dir + "/enums.hpp", dir + "/undocumented.hpp",
+          dir + "/doxygen.hpp", dir + "/m7.hpp"};
+}
+
+// USR set is the stable identity of a parse, independent of row order.
+std::set<std::string> symbol_usrs(const model::ParsedModule& m) {
+  std::set<std::string> usrs;
+  for (const auto& s : m.symbols) usrs.insert(s.usr);
+  return usrs;
+}
+
+}  // namespace
+
+TEST_CASE("parse_files merges every input into one module", "[parser]") {
+  parser::ParseOptions opts;
+  opts.jobs = 4;
+  auto merged = parser::parse_files(all_inputs(), opts);
+
+  // Symbols from each separate input are present in the combined module.
+  CHECK(find(merged, "geo::Circle") != nullptr);  // shapes.hpp
+  CHECK(merged.enumerators.size() >= 7);           // enums.hpp
+
+  // Each fixture's main file is recorded exactly once, and paths are unique.
+  std::set<std::string> paths;
+  for (const auto& f : merged.files) {
+    CHECK(paths.insert(f.path).second);  // no duplicate file rows after merge
+  }
+  CHECK(paths.size() >= all_inputs().size());
+}
+
+TEST_CASE("parse_files is deterministic regardless of job count", "[parser]") {
+  auto inputs = all_inputs();
+
+  parser::ParseOptions serial;
+  serial.jobs = 1;
+  parser::ParseOptions parallel;
+  parallel.jobs = 4;
+
+  auto a = parser::parse_files(inputs, serial);
+  auto b = parser::parse_files(inputs, parallel);
+
+  CHECK(symbol_usrs(a) == symbol_usrs(b));
+  CHECK(a.symbols.size() == b.symbols.size());
+  CHECK(a.references.size() == b.references.size());
+  CHECK(a.files.size() == b.files.size());
+
+  // Merge order follows input order, not thread completion order: the file
+  // rows land in a stable sequence whether parsed serially or concurrently.
+  std::vector<std::string> pa;
+  std::vector<std::string> pb;
+  for (const auto& f : a.files) pa.push_back(f.path);
+  for (const auto& f : b.files) pb.push_back(f.path);
+  CHECK(pa == pb);
 }
 
 #else  // !CLANGQUILL_HAVE_LIBCLANG

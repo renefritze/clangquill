@@ -52,6 +52,7 @@ struct PyParseOptions {
   std::vector<std::string> extra_args;
   std::optional<std::string> compile_commands_dir;
   bool keep_going = true;
+  int jobs = 0;
 };
 
 struct ParseResult {
@@ -78,10 +79,10 @@ ParseResult parse_to_sqlite(const std::vector<std::string>& inputs,
   po.extra_args = opt.extra_args;
   po.compile_commands_dir = opt.compile_commands_dir;
   po.keep_going = opt.keep_going;
+  po.jobs = opt.jobs;
 
-  clangquill::parser::Parser parser(po);
-  clangquill::model::ParsedModule mod;
-  for (const auto& in : inputs) parser.parse_file(in, mod);
+  clangquill::model::ParsedModule mod =
+      clangquill::parser::parse_files(inputs, po);
 
   clangquill::store::SqliteStore store(db_path);
   store.write(mod, clangquill::store::Meta::current());
@@ -113,7 +114,8 @@ NB_MODULE(_core, m) {
       .def_rw("defines", &PyParseOptions::defines)
       .def_rw("extra_args", &PyParseOptions::extra_args)
       .def_rw("compile_commands_dir", &PyParseOptions::compile_commands_dir)
-      .def_rw("keep_going", &PyParseOptions::keep_going);
+      .def_rw("keep_going", &PyParseOptions::keep_going)
+      .def_rw("jobs", &PyParseOptions::jobs);
 
   nb::class_<ParseResult>(m, "ParseResult")
       .def_ro("symbol_count", &ParseResult::symbol_count)

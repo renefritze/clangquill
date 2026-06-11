@@ -16,6 +16,7 @@ def test_defaults_match_issue_contract():
     assert cfg.std == "c++20"
     assert cfg.toctree_maxdepth == 2
     assert cfg.root_document == "index"
+    assert cfg.jobs == 0
 
 
 def test_config_fields_cover_every_documented_value():
@@ -28,6 +29,7 @@ def test_config_fields_cover_every_documented_value():
         "clangquill_std",
         "clangquill_defines",
         "clangquill_clang_resource_dir",
+        "clangquill_jobs",
         "clangquill_output_dir",
         "clangquill_template_dirs",
         "clangquill_templates",
@@ -73,6 +75,16 @@ def test_validate_accepts_known_group_by(mode: str):
 def test_validate_rejects_bad_maxdepth():
     with pytest.raises(ConfigError, match="toctree_maxdepth"):
         Config(input=["a.hpp"], toctree_maxdepth=0).validate()
+
+
+def test_validate_rejects_negative_jobs():
+    with pytest.raises(ConfigError, match="jobs"):
+        Config(input=["a.hpp"], jobs=-1).validate()
+
+
+@pytest.mark.parametrize("jobs", [0, 1, 8])
+def test_validate_accepts_non_negative_jobs(jobs: int):
+    assert Config(input=["a.hpp"], jobs=jobs).validate().jobs == jobs
 
 
 def test_validate_returns_self():
