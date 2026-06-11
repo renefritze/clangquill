@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 CONFIG_PREFIX = "clangquill_"
 
 # Permitted values for ``group_by`` (how generated pages are partitioned).
-GROUP_BY_CHOICES = ("symbol", "file")
+GROUP_BY_CHOICES = ("symbol", "file", "class")
 
 
 class ConfigError(ValueError):

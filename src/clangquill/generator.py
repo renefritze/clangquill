@@ -112,6 +112,22 @@ _FUNCTION_KINDS = frozenset(
     },
 )
 
+# Record kinds that earn their own page under ``group_by="class"``: each renders
+# in full (members and nested types stay on the record's page).
+_RECORD_KINDS = frozenset(
+    {
+        SymbolKind.CLASS,
+        SymbolKind.STRUCT,
+        SymbolKind.UNION,
+        SymbolKind.CLASS_TEMPLATE,
+    },
+)
+
+# Container kinds the class-granular split walks into rather than rendering
+# inline: a namespace is transparent (descended through) and a record becomes
+# its own page. Everything else is a leaf collected onto its namespace's page.
+_CONTAINER_KINDS = _RECORD_KINDS | {SymbolKind.NAMESPACE}
+
 _SLUG_RE = re.compile(r"[^0-9A-Za-z]+")
 _BLANKS_RE = re.compile(r"\n{3,}")
 
@@ -504,18 +520,37 @@ class Generator:
         template = self.env.get_template("group.md.jinja")
         return _normalize(template.render(group=group, level=level))
 
+    def render_namespace_page(self, symbol: Symbol, members: Sequence[Symbol], *, level: int = 1) -> str:
+        """Render a namespace's own page under ``group_by="class"``.
+
+        Unlike :meth:`render_symbol`, which recurses through every child, this
+        renders only ``members`` — the namespace's leaf declarations (free
+        functions, typedefs, variables, enums, …). Its child classes and nested
+        namespaces are emitted as separate pages, so listing them here too would
+        duplicate their content.
+        """
+        template = self.env.get_template("namespace-page.md.jinja")
+        return _normalize(template.render(symbol=symbol, symbols=members, level=level))
+
     def render_pages(self, *, group_by: str = "symbol") -> list[RenderedPage]:
         r"""Render every page in memory without writing, in toctree order.
 
         ``group_by`` selects the page partitioning: ``"symbol"`` yields one page
-        per top-level symbol, ``"file"`` one page per parsed source file. Pages
-        for any Doxygen ``\defgroup`` groups are appended after the symbol/file
+        per top-level symbol, ``"file"`` one page per parsed source file, and
+        ``"class"`` one page per documented class/namespace (splitting a single
+        colossal namespace page into one page per member class). Pages for any
+        Doxygen ``\defgroup`` groups are appended after the symbol/file/class
         pages; when there are no groups nothing is appended, so output for
         group-free projects is unchanged. The caller decides how (and whether)
         to persist each :class:`RenderedPage`, which is what lets the
         incremental pipeline skip unchanged outputs.
         """
-        pages = self._render_file_pages() if group_by == "file" else self._render_symbol_pages()
+        if group_by == "file":
+            pages = self._render_file_pages()
+        elif group_by == "class":
+            pages = self._render_class_pages()
+        else:
+            pages = self._render_symbol_pages()
         return pages + self._render_group_pages()
 
     def render_index(
@@ -539,7 +574,8 @@ class Generator:
         """Render the IR into ``out_dir`` and write a toctree index.
 
         ``group_by`` selects the page partitioning: ``"symbol"`` writes one page
-        per top-level symbol, ``"file"`` one page per parsed source file.
+        per top-level symbol, ``"file"`` one page per parsed source file, and
+        ``"class"`` one page per documented class/namespace.
         ``toctree_maxdepth`` and ``root_document`` shape the generated index
         page (written as ``<root_document>.md``). Returns the page stems written
         (excluding the index), in toctree order.
@@ -583,6 +619,46 @@ class Generator:
             stem = self._unique_stem(_slug(name), seen)
             pages.append(RenderedPage(stem, name, self.render_file(source_file, level=1)))
         return pages
+
+    def _render_class_pages(self) -> list[RenderedPage]:
+        """Render one page per documented class, splitting big namespace pages.
+
+        Where :meth:`_render_symbol_pages` emits a single page per root symbol —
+        collapsing an entire ``namespace Eigen`` into one colossal page — this
+        descends *through* namespaces, emitting a page per documented record
+        (class/struct/union/class template) and a page per namespace carrying
+        only that namespace's own leaf members (free functions, typedefs,
+        variables, enums). Each record renders in full, so its methods and
+        nested types stay on the record's own page.
+        """
+        pages: list[RenderedPage] = []
+        seen: set[str] = set()
+        for root in self.roots():
+            self._emit_class_pages(root, pages, seen)
+        return pages
+
+    def _emit_class_pages(self, symbol: Symbol, pages: list[RenderedPage], seen: set[str]) -> None:
+        """Append the class-granular page(s) for ``symbol`` and its subtree."""
+        name = symbol.qualified_name or symbol.spelling
+        if symbol.kind != SymbolKind.NAMESPACE:
+            # A record (or a non-container root, e.g. a global free function)
+            # renders as one self-contained page.
+            stem = self._unique_stem(_slug(name), seen)
+            pages.append(RenderedPage(stem, name, self.render_symbol(symbol, level=1)))
+            return
+        # A namespace is transparent: each container child becomes its own page,
+        # while its leaf members collect onto a page for the namespace itself.
+        children = self.children(symbol)
+        leaves = [c for c in children if c.kind not in _CONTAINER_KINDS]
+        # Skip an empty, undocumented namespace shell (its classes still page),
+        # but keep one that carries leaf members or its own documentation.
+        if leaves or symbol.is_documented:
+            label = symbol.qualified_name or "(global namespace)"
+            stem = self._unique_stem(_slug(name), seen)
+            pages.append(RenderedPage(stem, label, self.render_namespace_page(symbol, leaves, level=1)))
+        for child in children:
+            if child.kind in _CONTAINER_KINDS:
+                self._emit_class_pages(child, pages, seen)
 
     def _render_group_pages(self) -> list[RenderedPage]:
         """Render one page per documentation group, top-level groups first.

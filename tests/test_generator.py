@@ -143,6 +143,60 @@ def test_group_by_file_writes_one_page_per_file(gen: Generator, tmp_path: Path) 
     assert "geo::Circle" in page
 
 
+def test_group_by_class_splits_namespace_into_per_class_pages(gen: Generator, tmp_path: Path) -> None:
+    # Where group_by="symbol" collapses the whole geo namespace onto one page,
+    # group_by="class" descends through the namespace: each documented record
+    # earns its own page, and the namespace keeps only its leaf members.
+    out = tmp_path / "api"
+    pages = gen.generate(out, group_by="class")
+    assert pages == ["geo", "geo_Shape", "geo_Circle"]
+
+    namespace = (out / "geo.md").read_text()
+    assert namespace.startswith("# Namespace `geo`")
+    # Leaf members of the namespace live on the namespace page ...
+    assert "{cpp:function} Circle geo::scale" in namespace
+    assert "{cpp:enum} geo::Color" in namespace
+    assert "{cpp:type} geo::Distance" in namespace
+    # ... but its record members are split out, not duplicated here.
+    assert "{cpp:class} geo::Circle" not in namespace
+    assert "{cpp:class} geo::Shape" not in namespace
+
+    circle = (out / "geo_Circle.md").read_text()
+    assert circle.startswith("# Class `geo::Circle`")
+    # A record renders in full, so its own members stay on its page.
+    assert "{cpp:function} double geo::Circle::area() const" in circle
+    assert "{cpp:member} double geo::Circle::radius" in circle
+
+
+def test_group_by_class_drops_leafless_namespace_but_keeps_records(store: Store, tmp_path: Path) -> None:
+    # With undocumented symbols suppressed the geo namespace still holds
+    # documented records and leaves, so it pages as usual; the undocumented free
+    # function geo::mystery is gone from the namespace page.
+    gen = Generator(store, include_undocumented=False)
+    out = tmp_path / "api"
+    pages = gen.generate(out, group_by="class")
+    assert pages == ["geo", "geo_Shape", "geo_Circle"]
+    assert "geo::mystery" not in (out / "geo.md").read_text()
+
+
+def test_group_by_class_pages_global_macros_and_nested_records(m7_db: Path, tmp_path: Path) -> None:
+    # Global macros are non-container roots: each gets its own page. The nn
+    # namespace splits its record members (a struct and a class template) onto
+    # their own pages while its concept/function leaves stay on the namespace
+    # page; the \defgroup page is still appended last.
+    with Store.open(m7_db) as store:
+        out = tmp_path / "api"
+        pages = Generator(store).generate(out, group_by="class")
+
+    assert pages == ["nn", "nn_Pt", "nn_Box", "MAXM", "PI", "group_grp"]
+    nn = (out / "nn.md").read_text()
+    assert "nn::Addable" in nn  # a concept leaf
+    assert "nn::helper" in nn  # a free-function leaf
+    assert "nn::Box" not in nn  # the class template is its own page
+    assert "nn::Pt" not in nn  # the struct is its own page
+    assert (out / "nn_Box.md").read_text().startswith("# Class template `nn::Box`")
+
+
 def test_relpath_filter_reroots_under_base(store: Store) -> None:
     gen = Generator(store, path_base="/work/repo")
     # A file under the base is shown relative, with forward slashes.

@@ -62,7 +62,7 @@ Every knob is a `clangquill_*` config value mirroring a field of
 `clangquill.config.Config`, including `clangquill_compile_commands`,
 `clangquill_defines`, `clangquill_template_dirs`, `clangquill_templates`
 (per-kind overrides), `clangquill_include_undocumented`,
-`clangquill_comment_parser`, `clangquill_group_by` (`symbol` or `file`) and the
+`clangquill_comment_parser`, `clangquill_group_by` (`symbol`, `file` or `class`) and the
 `clangquill_toctree_maxdepth` / `clangquill_root_document` toctree options. The
 generated `cpp:` domain objects appear in `objects.inv` and cross-reference like
 any hand-written page.
