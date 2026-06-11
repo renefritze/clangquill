@@ -163,9 +163,7 @@ class BuildCache:
         upgraded write fail. Dropping forces the current :data:`_SCHEMA`.
         """
         self._con.executescript(
-            "DROP TABLE IF EXISTS meta;"
-            "DROP TABLE IF EXISTS inputs;"
-            "DROP TABLE IF EXISTS outputs;",
+            "DROP TABLE IF EXISTS meta;DROP TABLE IF EXISTS inputs;DROP TABLE IF EXISTS outputs;",
         )
         self._con.executescript(_SCHEMA)
 
