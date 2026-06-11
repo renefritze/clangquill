@@ -397,6 +397,10 @@ model::ParsedModule parse_files(const std::vector<std::string>& inputs,
   // One result slot per batch keeps the merge deterministic (input order)
   // regardless of which thread parses which batch or in what order it finishes.
   std::vector<model::ParsedModule> parts(num_batches);
+  // Per-batch success flags, flattened into `tu_parsed` only after the workers
+  // join: writing worker results straight into a shared std::vector<bool> would
+  // race, since its bit-packed elements can share a word across batches.
+  std::vector<std::vector<bool>> ok_parts(num_batches);
 
   unsigned effective_jobs = options.jobs > 0
                                 ? static_cast<unsigned>(options.jobs)
@@ -428,12 +432,14 @@ model::ParsedModule parse_files(const std::vector<std::string>& inputs,
         parser.parse_batch(members, part,
                            tu_files != nullptr ? &member_files : nullptr,
                            tu_parsed != nullptr ? &member_ok : nullptr);
-        // Each thread writes its own batch's slots, so the per-input sinks
-        // need no synchronisation despite the shared output vectors.
+        // Each thread writes only its own batch's slots — distinct objects in
+        // the shared outer vectors — so this needs no synchronisation. The
+        // success flags stay per-batch (ok_parts) until the join, because
+        // bit-packed vector<bool> elements are not distinct objects.
         for (std::size_t i = 0; i < members.size(); ++i) {
           if (tu_files != nullptr) (*tu_files)[begin + i] = std::move(member_files[i]);
-          if (tu_parsed != nullptr) (*tu_parsed)[begin + i] = member_ok[i];
         }
+        ok_parts[b] = std::move(member_ok);
         parts[b] = std::move(part);
       } catch (const std::exception& e) {
         parts[b] = model::ParsedModule{};
@@ -464,6 +470,17 @@ model::ParsedModule parse_files(const std::vector<std::string>& inputs,
       throw;
     }
     for (auto& t : threads) t.join();
+  }
+
+  if (tu_parsed != nullptr) {
+    // A batch that died with an exception leaves its ok_parts slot empty, so
+    // its inputs keep their initial `false`.
+    for (std::size_t b = 0; b < num_batches; ++b) {
+      const std::size_t begin = b * batch_size;
+      for (std::size_t i = 0; i < ok_parts[b].size(); ++i) {
+        (*tu_parsed)[begin + i] = ok_parts[b][i];
+      }
+    }
   }
 
   model::ParsedModule merged;
