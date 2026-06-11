@@ -61,6 +61,35 @@ def test_outputs_round_trip_and_replacement(tmp_path: Path) -> None:
         assert cache.outputs() == {"a.md": "h1b"}
 
 
+def test_render_round_trip_and_currency(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    with BuildCache.open(cache_dir) as cache:
+        # Nothing recorded yet: never current, no summary.
+        assert not cache.render_is_current("rfp-1")
+        assert cache.render_summary() is None
+
+        summary = {"symbol_count": 3, "reference_count": 1, "file_count": 2, "pages": ["a", "b"]}
+        cache.record_render("rfp-1", summary)
+
+    with BuildCache.open(cache_dir) as cache:
+        # State persists and currency is fingerprint-sensitive.
+        assert cache.render_is_current("rfp-1")
+        assert not cache.render_is_current("rfp-2")
+        assert cache.render_summary() == summary
+
+
+def test_render_summary_survives_version_reset_as_absent(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    with BuildCache.open(cache_dir) as cache:
+        cache.record_render("rfp", {"symbol_count": 1, "pages": []})
+        cache._set_meta("cache_version", str(CACHE_VERSION + 1))  # noqa: SLF001
+        cache._con.commit()  # noqa: SLF001
+    # An incompatible version wipes the render bookkeeping along with the rest.
+    with BuildCache.open(cache_dir) as cache:
+        assert cache.render_summary() is None
+        assert not cache.render_is_current("rfp")
+
+
 def test_corrupted_cache_is_discarded_and_rebuilt(tmp_path: Path) -> None:
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()

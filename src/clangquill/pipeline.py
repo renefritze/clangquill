@@ -11,7 +11,11 @@ the same pipeline here so they behave identically. The steps are:
 When ``clangquill_cache_dir`` is configured the build becomes *incremental*
 (milestone M6): the SQLite IR and a small bookkeeping cache persist between
 runs, so an unchanged build skips both the libclang parse and every output
-write, and symbols that disappear have their pages deleted. Note the cache is
+write, and symbols that disappear have their pages deleted. A *fully* unchanged
+build (cache-hit parse and unchanged render config/templates) goes one step
+further and skips the Jinja render entirely, returning the previous run's counts
+straight from the cache rather than re-rendering only to discover nothing
+changed. Note the cache is
 currently all-or-nothing on the parse side: touching any input (or transitive
 include) re-parses the whole module — but only the affected pages are
 rewritten. Per-file re-parses are future work (see the per-TU incremental
@@ -154,6 +158,55 @@ def _parse_fingerprint(config: Config, base_dir: Path, inputs: list[str]) -> str
     )
 
 
+def _template_files_hash(template_dirs: list[str]) -> dict[str, str]:
+    """Hash every file under each override template directory.
+
+    Editing an override template changes the rendered output even though the IR
+    is untouched, so the noop-render skip must notice it. Builtin templates are
+    package data versioned with ``core_version``/the install, so only the
+    user-provided dirs are walked here.
+    """
+    digests: dict[str, str] = {}
+    for directory in template_dirs:
+        root = Path(directory)
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*")):
+            if path.is_file():
+                try:
+                    digests[str(path)] = file_sha256(path)
+                except OSError:
+                    digests[str(path)] = "missing"
+    return digests
+
+
+def _render_fingerprint(config: Config, base_dir: Path) -> str:
+    """Fingerprint everything that shapes the output *given an unchanged IR*.
+
+    Covers the render-affecting configuration (template selection, grouping,
+    toctree shape, output location, …) and the contents of any override template
+    directories. The IR itself is excluded on purpose: the caller only consults
+    this when the parse was served from cache, which already guarantees the IR is
+    byte-identical to the run that produced the cached render.
+    """
+    template_dirs = [str((base_dir / d).resolve()) for d in config.template_dirs]
+    return fingerprint(
+        {
+            "template_dirs": template_dirs,
+            "template_files": _template_files_hash(template_dirs),
+            "templates": dict(sorted(config.templates.items())),
+            "include_undocumented": config.include_undocumented,
+            "comment_parser": config.comment_parser or "",
+            "group_by": config.group_by,
+            "toctree_maxdepth": config.toctree_maxdepth,
+            "root_document": config.root_document,
+            "path_base": str((base_dir / config.path_base).resolve()) if config.path_base else "",
+            "output_dir": str((base_dir / config.output_dir).resolve()),
+            "core_version": getattr(_core, "__core_version__", ""),
+        },
+    )
+
+
 def _make_generator(config: Config, base_dir: Path, store: Store) -> Generator:
     """Build a :class:`Generator` wired from ``config`` against ``store``."""
     return Generator(
@@ -247,9 +300,17 @@ def _incremental_build(
     cache_dir.mkdir(parents=True, exist_ok=True)
     ir_path = cache_dir / IR_NAME
     parse_fp = _parse_fingerprint(config, base, inputs)
+    render_fp = _render_fingerprint(config, base)
 
     with BuildCache.open(cache_dir) as cache:
         parsed = not (ir_path.is_file() and cache.parse_is_current(parse_fp))
+        # Fully unchanged build: the parse came from cache (IR identical) and the
+        # render config/templates are unchanged, so the output the last run wrote
+        # is already on disk. Skip the store open and every Jinja render — the
+        # dominant cost of a noop build — and replay the cached summary.
+        if not parsed and cache.render_is_current(render_fp):
+            return _noop_result(output_dir, ir_path, cache.render_summary())
+
         counts: _core.ParseResult | None = None
         diagnostics: list[str] = []
         if parsed:
@@ -268,18 +329,55 @@ def _incremental_build(
         page_stems = [name[: -len(".md")] for name, _ in rendered[:-1]]
         written, deleted = _apply_outputs(output_dir, rendered, cache)
 
+        symbol_count = counts.symbol_count if counts else symbol_count
+        reference_count = counts.reference_count if counts else reference_count
+        file_count = counts.file_count if counts else file_count
+        cache.record_render(
+            render_fp,
+            {
+                "symbol_count": symbol_count,
+                "reference_count": reference_count,
+                "file_count": file_count,
+                "pages": page_stems,
+            },
+        )
+
     return BuildResult(
         output_dir=output_dir,
         pages=page_stems,
         db_path=ir_path,
         db_is_temporary=False,
-        symbol_count=counts.symbol_count if counts else symbol_count,
-        reference_count=counts.reference_count if counts else reference_count,
-        file_count=counts.file_count if counts else file_count,
+        symbol_count=symbol_count,
+        reference_count=reference_count,
+        file_count=file_count,
         diagnostics=diagnostics,
         parsed=parsed,
         pages_written=written,
         pages_deleted=deleted,
+    )
+
+
+def _noop_result(output_dir: Path, ir_path: Path, summary: dict[str, object] | None) -> BuildResult:
+    """Build the :class:`BuildResult` for a fully cached (unrendered) build."""
+    summary = summary or {}
+
+    def count(key: str) -> int:
+        value = summary.get(key)
+        return value if isinstance(value, int) else 0
+
+    pages = summary.get("pages")
+    return BuildResult(
+        output_dir=output_dir,
+        pages=[str(p) for p in pages] if isinstance(pages, list) else [],
+        db_path=ir_path,
+        db_is_temporary=False,
+        symbol_count=count("symbol_count"),
+        reference_count=count("reference_count"),
+        file_count=count("file_count"),
+        diagnostics=[],
+        parsed=False,
+        pages_written=[],
+        pages_deleted=[],
     )
 
 

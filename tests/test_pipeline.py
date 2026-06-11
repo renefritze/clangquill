@@ -128,6 +128,70 @@ def test_incremental_unchanged_build_regenerates_nothing(project: Path) -> None:
 
 
 @requires_libclang
+def test_incremental_noop_skips_rendering(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = Config(input=["demo.hpp"], output_dir="api", cache_dir=".cache")
+    first = build(config, base_dir=project)
+    assert first.parsed
+
+    # A noop rebuild must not render at all: the second run short-circuits before
+    # _rendered_files (the Jinja pass) is ever reached.
+    def boom(*_args: object, **_kwargs: object) -> list[tuple[str, str]]:
+        msg = "rendering should be skipped on a noop build"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(pipeline, "_rendered_files", boom)
+
+    second = build(config, base_dir=project)
+    assert not second.parsed
+    assert second.pages_written == []
+    assert second.pages_deleted == []
+    # Counts and page list are replayed faithfully from the cache.
+    assert second.pages == first.pages
+    assert second.symbol_count == first.symbol_count
+    assert second.reference_count == first.reference_count
+    assert second.file_count == first.file_count
+
+
+@requires_libclang
+def test_incremental_render_config_change_rerenders_without_reparse(project: Path) -> None:
+    config = Config(input=["demo.hpp"], output_dir="api", cache_dir=".cache")
+    build(config, base_dir=project)
+
+    # Changing a render-only option leaves the parse cached but must still
+    # re-render: the noop skip is keyed on the render fingerprint too.
+    deeper = Config(input=["demo.hpp"], output_dir="api", cache_dir=".cache", toctree_maxdepth=4)
+    result = build(deeper, base_dir=project)
+    assert not result.parsed
+    assert "index.md" in result.pages_written
+    assert ":maxdepth: 4" in (project / "api" / "index.md").read_text()
+
+
+@requires_libclang
+def test_incremental_template_edit_busts_noop_skip(project: Path) -> None:
+    templates = project / "templates"
+    templates.mkdir()
+    override = templates / "namespace.md.jinja"
+    override.write_text("# OVERRIDE {{ symbol.qualified_name }}\n")
+    config = Config(
+        input=["demo.hpp"],
+        output_dir="api",
+        cache_dir=".cache",
+        template_dirs=["templates"],
+    )
+    first = build(config, base_dir=project)
+    assert "OVERRIDE demo" in (project / "api" / "demo.md").read_text()
+    assert first.parsed
+
+    # Editing the override template (IR untouched) must re-render rather than
+    # serve the stale page from the noop cache.
+    override.write_text("# CHANGED {{ symbol.qualified_name }}\n")
+    result = build(config, base_dir=project)
+    assert not result.parsed
+    assert "demo.md" in result.pages_written
+    assert "CHANGED demo" in (project / "api" / "demo.md").read_text()
+
+
+@requires_libclang
 def test_incremental_touch_header_regenerates_only_affected(project: Path) -> None:
     (project / "alpha.hpp").write_text("/// alpha ns\nnamespace alpha { /// f\nint f(); }\n")
     (project / "beta.hpp").write_text("/// beta ns\nnamespace beta { /// g\nint g(); }\n")
