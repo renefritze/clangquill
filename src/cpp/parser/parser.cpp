@@ -190,15 +190,21 @@ model::ParsedModule parse_files(const std::vector<std::string>& inputs,
     Parser parser(options);
     std::size_t i;
     while ((i = next.fetch_add(1)) < inputs.size()) {
-      // An exception escaping a worker thread would call std::terminate and
-      // crash the whole process, so contain it as a diagnostic (parse errors
-      // are already reported this way) and carry on with the next input.
+      // Parse into a local module so a mid-parse exception cannot leave
+      // half-built rows in the slot: only a clean parse is published, and an
+      // exception escaping a worker thread (which would otherwise call
+      // std::terminate) is contained as a diagnostic (parse errors are already
+      // reported this way) so the run carries on with the next input.
       try {
-        parser.parse_file(inputs[i], parts[i]);
+        model::ParsedModule part;
+        parser.parse_file(inputs[i], part);
+        parts[i] = std::move(part);
       } catch (const std::exception& e) {
+        parts[i] = model::ParsedModule{};
         parts[i].diagnostics.push_back("exception parsing " + inputs[i] + ": " +
                                        e.what());
       } catch (...) {
+        parts[i] = model::ParsedModule{};
         parts[i].diagnostics.push_back("unknown exception parsing " +
                                        inputs[i]);
       }
@@ -210,7 +216,17 @@ model::ParsedModule parse_files(const std::vector<std::string>& inputs,
   } else {
     std::vector<std::thread> threads;
     threads.reserve(effective_jobs);
-    for (unsigned t = 0; t < effective_jobs; ++t) threads.emplace_back(worker);
+    // Destroying a joinable std::thread calls std::terminate, so if launching
+    // one throws (e.g. the OS refuses a new thread) join the ones already
+    // started before letting the exception propagate.
+    try {
+      for (unsigned t = 0; t < effective_jobs; ++t) threads.emplace_back(worker);
+    } catch (...) {
+      for (auto& t : threads) {
+        if (t.joinable()) t.join();
+      }
+      throw;
+    }
     for (auto& t : threads) t.join();
   }
 
