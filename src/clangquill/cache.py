@@ -58,6 +58,13 @@ CREATE TABLE IF NOT EXISTS outputs (
 # changes the cached IR is stale regardless of file contents.
 _PARSE_FINGERPRINT = "parse_fingerprint"
 
+# Meta keys backing the noop-render skip: the fingerprint of everything that
+# shapes the rendered output *given an unchanged IR* (render config plus any
+# override template contents), and a small JSON summary of the last render so a
+# fully unchanged build can return its counts/pages without rendering at all.
+_RENDER_FINGERPRINT = "render_fingerprint"
+_RENDER_SUMMARY = "render_summary"
+
 
 def file_sha256(path: str | Path) -> str:
     """Return the hex SHA-256 of ``path``'s bytes, matching the C++ digest.
@@ -186,6 +193,45 @@ class BuildCache:
             "INSERT OR REPLACE INTO inputs(path, sha256) VALUES(?, ?)",
             list(files.items()),
         )
+        self._con.commit()
+
+    # -- render bookkeeping ---------------------------------------------------
+
+    @property
+    def render_fingerprint(self) -> str | None:
+        """The fingerprint of the render config/templates that last rendered."""
+        return self._meta(_RENDER_FINGERPRINT)
+
+    def render_summary(self) -> dict[str, object] | None:
+        """Return the cached summary of the last render, or ``None``.
+
+        The summary carries the symbol/reference/file counts and the ordered
+        page stems so a noop build can reproduce its :class:`BuildResult` without
+        opening the store or running Jinja.
+        """
+        raw = self._meta(_RENDER_SUMMARY)
+        if raw is None:
+            return None
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            return None
+        return value if isinstance(value, dict) else None
+
+    def render_is_current(self, render_fingerprint: str) -> bool:
+        """Whether the last render still applies to ``render_fingerprint``.
+
+        ``True`` only when the fingerprint matches *and* a summary was stored, so
+        a cache predating this optimisation never short-circuits a render.
+        Callers must separately confirm the IR itself is unchanged (a cache-hit
+        parse) before trusting this — the fingerprint deliberately omits the IR.
+        """
+        return self.render_fingerprint == render_fingerprint and self.render_summary() is not None
+
+    def record_render(self, render_fingerprint: str, summary: Mapping[str, object]) -> None:
+        """Persist the render fingerprint and summary of a fresh render."""
+        self._set_meta(_RENDER_FINGERPRINT, render_fingerprint)
+        self._set_meta(_RENDER_SUMMARY, json.dumps(dict(summary)))
         self._con.commit()
 
     # -- output bookkeeping ---------------------------------------------------
