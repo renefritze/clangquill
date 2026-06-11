@@ -152,6 +152,17 @@ jobs:
             echo "# Benchmarks"
             tail -n +2 "$latest"
           } > docs/benchmarks.md
+      - name: Lint generated docs with pre-commit
+        # Run the repo's pre-commit hooks against the freshly generated page so
+        # the commit opened below is already clean — the same hooks gate every
+        # PR, including this docs PR. The fixer hooks (trailing-whitespace,
+        # end-of-file-fixer, …) may rewrite the file and exit non-zero on the
+        # first pass, so swallow that, then re-run to assert the result is
+        # actually clean and fail the job on any remaining (unfixable) error.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          uvx pre-commit run --files docs/benchmarks.md --color=always || true
+          uvx pre-commit run --files docs/benchmarks.md --color=always
       - name: Open docs update PR against main
         if: startsWith(github.ref, 'refs/tags/v')
         uses: peter-evans/create-pull-request@84ae59a2cdc2258d6fa0732dd66352dddae2a412  # v7.0.9

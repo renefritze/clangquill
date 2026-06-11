@@ -796,6 +796,7 @@ def render_markdown(payload: dict) -> str:
     for repo, repo_data in payload["results"].items():
         meta = payload["repos"][repo]
         lines.append(f"## {repo}")
+        lines.append("")
         lines.append(f"_ref: {meta['resolved_ref']} · commit: `{meta['commit'][:12] or 'n/a'}`_")
         lines.append("")
         header = "| stage | " + " | ".join(scenarios) + " |"
