@@ -30,35 +30,91 @@ SqliteStore::SqliteStore(const std::string& path) : db_(path) {
 
 void SqliteStore::write(const model::ParsedModule& module, const Meta& meta) {
   Transaction tx(db_);
+  put_meta(meta);
+  FileIds file_ids = insert_files(module);
+  insert_rows(module, file_ids);
+  tx.commit();
+}
 
-  {
-    Stmt m(db_, "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?);");
-    auto put = [&](std::string_view k, std::string_view v) {
-      m.reset();
-      m.bind(1, k);
-      m.bind(2, v);
-      m.step();
-    };
-    put("schema_version", std::to_string(meta.schema_version));
-    put("core_version", meta.core_version);
-    put("libclang_version", meta.libclang_version);
+void SqliteStore::write_tu(const model::ParsedModule& module, const Meta& meta) {
+  Transaction tx(db_);
+  put_meta(meta);
+  // Upsert so files shared with other TUs keep their id (and the symbols other
+  // TUs anchored to them survive); a changed file simply refreshes its hash.
+  FileIds file_ids = upsert_files(module);
+  delete_files_rows(file_ids);
+  insert_rows(module, file_ids);
+  tx.commit();
+}
+
+void SqliteStore::put_meta(const Meta& meta) {
+  Stmt m(db_, "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?);");
+  auto put = [&](std::string_view k, std::string_view v) {
+    m.reset();
+    m.bind(1, k);
+    m.bind(2, v);
+    m.step();
+  };
+  put("schema_version", std::to_string(meta.schema_version));
+  put("core_version", meta.core_version);
+  put("libclang_version", meta.libclang_version);
+}
+
+SqliteStore::FileIds SqliteStore::insert_files(
+    const model::ParsedModule& module) {
+  FileIds file_ids;
+  Stmt f(db_, "INSERT INTO files(path, sha256, size_bytes) VALUES(?, ?, ?);");
+  for (const auto& file : module.files) {
+    f.reset();
+    f.bind(1, file.path);
+    f.bind(2, file.sha256);
+    f.bind(3, file.size_bytes);
+    f.step();
+    file_ids[file.path] = sqlite3_last_insert_rowid(db_.get());
   }
+  return file_ids;
+}
 
-  // files; remember the assigned id per path for symbol FK resolution.
-  std::unordered_map<std::string, std::int64_t> file_ids;
-  {
-    Stmt f(db_,
-           "INSERT INTO files(path, sha256, size_bytes) VALUES(?, ?, ?);");
-    for (const auto& file : module.files) {
-      f.reset();
-      f.bind(1, file.path);
-      f.bind(2, file.sha256);
-      f.bind(3, file.size_bytes);
-      f.step();
-      file_ids[file.path] = sqlite3_last_insert_rowid(db_.get());
-    }
+SqliteStore::FileIds SqliteStore::upsert_files(
+    const model::ParsedModule& module) {
+  FileIds file_ids;
+  // RETURNING hands back the row id whether the path was inserted or updated, so
+  // a file shared with an earlier TU keeps the id its symbols already reference.
+  Stmt f(db_,
+         "INSERT INTO files(path, sha256, size_bytes) VALUES(?, ?, ?) "
+         "ON CONFLICT(path) DO UPDATE SET sha256 = excluded.sha256, "
+         "size_bytes = excluded.size_bytes RETURNING id;");
+  for (const auto& file : module.files) {
+    f.reset();
+    f.bind(1, file.path);
+    f.bind(2, file.sha256);
+    f.bind(3, file.size_bytes);
+    f.step();
+    file_ids[file.path] = f.column_int64(0);
   }
+  return file_ids;
+}
 
+void SqliteStore::delete_files_rows(const FileIds& file_ids) {
+  // group_members has no cascade onto its member symbol (member_usr is plain
+  // text so cross-TU/unresolved members stay first class), so clear those rows
+  // explicitly before the symbol delete cascades the rest away.
+  Stmt dgm(db_,
+           "DELETE FROM group_members WHERE member_usr IN "
+           "(SELECT usr FROM symbols WHERE file_id = ?);");
+  Stmt ds(db_, "DELETE FROM symbols WHERE file_id = ?;");
+  for (const auto& [path, id] : file_ids) {
+    dgm.reset();
+    dgm.bind(1, id);
+    dgm.step();
+    ds.reset();
+    ds.bind(1, id);
+    ds.step();
+  }
+}
+
+void SqliteStore::insert_rows(const model::ParsedModule& module,
+                              const FileIds& file_ids) {
   {
     Stmt s(db_,
            "INSERT OR REPLACE INTO symbols(usr, parent_usr, kind, spelling, "
@@ -233,8 +289,6 @@ void SqliteStore::write(const model::ParsedModule& module, const Meta& meta) {
       gm.step();
     }
   }
-
-  tx.commit();
 }
 
 model::ParsedModule SqliteStore::read() {

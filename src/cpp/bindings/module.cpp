@@ -8,6 +8,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <cstddef>
 #include <stdexcept>
 
 #include "core/version.hpp"
@@ -55,12 +56,45 @@ struct PyParseOptions {
   int jobs = 0;
 };
 
+// One input translation unit and the full set of files it pulled in (the input
+// itself plus every transitive `#include`). Lets the Python cache attribute each
+// dependency to the input that needs it, so a header edit re-parses only the
+// translation units that include it.
+struct TuFiles {
+  std::string input;
+  std::vector<std::string> files;
+};
+
 struct ParseResult {
   int symbol_count = 0;
   int reference_count = 0;
   int file_count = 0;
   std::vector<std::string> diagnostics;
+  std::vector<TuFiles> translation_units;
 };
+
+#if defined(CLANGQUILL_HAVE_LIBCLANG)
+clangquill::parser::ParseOptions to_core_options(const PyParseOptions& opt) {
+  clangquill::parser::ParseOptions po;
+  po.std_flag = opt.std_flag;
+  po.include_dirs = opt.include_dirs;
+  po.defines = opt.defines;
+  po.extra_args = opt.extra_args;
+  po.compile_commands_dir = opt.compile_commands_dir;
+  po.keep_going = opt.keep_going;
+  po.jobs = opt.jobs;
+  return po;
+}
+
+ParseResult result_from_module(const clangquill::model::ParsedModule& mod) {
+  ParseResult res;
+  res.symbol_count = static_cast<int>(mod.symbols.size());
+  res.reference_count = static_cast<int>(mod.references.size());
+  res.file_count = static_cast<int>(mod.files.size());
+  res.diagnostics = mod.diagnostics;
+  return res;
+}
+#endif
 
 ParseResult parse_to_sqlite(const std::vector<std::string>& inputs,
                             const std::string& db_path,
@@ -72,26 +106,56 @@ ParseResult parse_to_sqlite(const std::vector<std::string>& inputs,
   throw std::runtime_error(
       "clangquill._core was built without libclang; cannot parse");
 #else
-  clangquill::parser::ParseOptions po;
-  po.std_flag = opt.std_flag;
-  po.include_dirs = opt.include_dirs;
-  po.defines = opt.defines;
-  po.extra_args = opt.extra_args;
-  po.compile_commands_dir = opt.compile_commands_dir;
-  po.keep_going = opt.keep_going;
-  po.jobs = opt.jobs;
-
+  // Parse all inputs (in parallel, honouring opt.jobs) while capturing each
+  // translation unit's file set so the cache can attribute every dependency to
+  // the input that pulled it in.
+  std::vector<std::vector<std::string>> tu_files;
   clangquill::model::ParsedModule mod =
-      clangquill::parser::parse_files(inputs, po);
+      clangquill::parser::parse_files(inputs, to_core_options(opt), &tu_files);
 
   clangquill::store::SqliteStore store(db_path);
   store.write(mod, clangquill::store::Meta::current());
 
-  ParseResult res;
-  res.symbol_count = static_cast<int>(mod.symbols.size());
-  res.reference_count = static_cast<int>(mod.references.size());
-  res.file_count = static_cast<int>(mod.files.size());
-  res.diagnostics = mod.diagnostics;
+  ParseResult res = result_from_module(mod);
+  res.translation_units.reserve(inputs.size());
+  for (std::size_t i = 0; i < inputs.size(); ++i) {
+    TuFiles tu;
+    tu.input = inputs[i];
+    tu.files = std::move(tu_files[i]);
+    res.translation_units.push_back(std::move(tu));
+  }
+  return res;
+#endif
+}
+
+// Re-parses a single input into an existing IR, replacing only that translation
+// unit's rows. The caller picks which inputs are stale (via the cache) and runs
+// this once per stale input instead of rebuilding the whole module.
+ParseResult parse_tu_to_sqlite(const std::string& input,
+                               const std::string& db_path,
+                               const PyParseOptions& opt) {
+#if !defined(CLANGQUILL_HAVE_LIBCLANG)
+  (void)input;
+  (void)db_path;
+  (void)opt;
+  throw std::runtime_error(
+      "clangquill._core was built without libclang; cannot parse");
+#else
+  clangquill::parser::Parser parser(to_core_options(opt));
+  clangquill::model::ParsedModule mod;
+  TuFiles tu;
+  tu.input = input;
+  // Bail before write_tu on a hard parse failure: otherwise the file's existing
+  // rows would be deleted and replaced with nothing, wiping good documentation.
+  if (!parser.parse_file(input, mod, &tu.files)) {
+    throw std::runtime_error("failed to parse translation unit: " + input);
+  }
+
+  clangquill::store::SqliteStore store(db_path);
+  store.write_tu(mod, clangquill::store::Meta::current());
+
+  ParseResult res = result_from_module(mod);
+  res.translation_units.push_back(std::move(tu));
   return res;
 #endif
 }
@@ -117,13 +181,23 @@ NB_MODULE(_core, m) {
       .def_rw("keep_going", &PyParseOptions::keep_going)
       .def_rw("jobs", &PyParseOptions::jobs);
 
+  nb::class_<TuFiles>(m, "TuFiles")
+      .def_ro("input", &TuFiles::input)
+      .def_ro("files", &TuFiles::files);
+
   nb::class_<ParseResult>(m, "ParseResult")
       .def_ro("symbol_count", &ParseResult::symbol_count)
       .def_ro("reference_count", &ParseResult::reference_count)
       .def_ro("file_count", &ParseResult::file_count)
-      .def_ro("diagnostics", &ParseResult::diagnostics);
+      .def_ro("diagnostics", &ParseResult::diagnostics)
+      .def_ro("translation_units", &ParseResult::translation_units);
 
   m.def("parse_to_sqlite", &parse_to_sqlite, nb::arg("inputs"),
         nb::arg("db_path"), nb::arg("options") = PyParseOptions{},
         "Parse C++ inputs and write the IR into a SQLite DB at db_path.");
+
+  m.def("parse_tu_to_sqlite", &parse_tu_to_sqlite, nb::arg("input"),
+        nb::arg("db_path"), nb::arg("options") = PyParseOptions{},
+        "Re-parse one input into an existing SQLite IR, replacing only that "
+        "translation unit's rows.");
 }

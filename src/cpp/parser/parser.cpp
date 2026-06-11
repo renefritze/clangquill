@@ -50,15 +50,36 @@ void record_file(const std::string& path, model::ParsedModule& out) {
   out.files.push_back(std::move(file));
 }
 
+// Threaded through the inclusion visitor: the module the file rows land in, plus
+// an optional per-TU sink so a dependency can be attributed to the input TU that
+// pulled it in (used by the per-TU incremental re-parse path).
+struct InclusionCtx {
+  model::ParsedModule* out;
+  std::vector<std::string>* tu_files;  // may be null
+};
+
+// Appends `path` to a per-TU file list, skipping duplicates so a header included
+// many times within one TU is listed once.
+void note_tu_file(std::vector<std::string>* tu_files, const std::string& path) {
+  if (tu_files == nullptr) return;
+  for (const auto& f : *tu_files) {
+    if (f == path) return;
+  }
+  tu_files->push_back(path);
+}
+
 // libclang inclusion visitor: records every file pulled into the translation
 // unit (the main file plus everything it transitively `#include`s) so the M6
 // cache can invalidate a re-parse when any tracked dependency changes.
 void record_inclusion(CXFile included_file, CXSourceLocation* /*stack*/,
                       unsigned /*len*/, CXClientData data) {
-  auto& out = *static_cast<model::ParsedModule*>(data);
+  auto& ctx = *static_cast<InclusionCtx*>(data);
   CXString name = clang_getFileName(included_file);
   const char* cstr = clang_getCString(name);
-  if (cstr != nullptr && cstr[0] != '\0') record_file(cstr, out);
+  if (cstr != nullptr && cstr[0] != '\0') {
+    record_file(cstr, *ctx.out);
+    note_tu_file(ctx.tu_files, cstr);
+  }
   clang_disposeString(name);
 }
 
@@ -96,7 +117,8 @@ std::vector<std::string> Parser::build_args(const std::string& path) const {
   return args;
 }
 
-bool Parser::parse_file(const std::string& path, model::ParsedModule& out) {
+bool Parser::parse_file(const std::string& path, model::ParsedModule& out,
+                        std::vector<std::string>* tu_files) {
   std::vector<std::string> args = build_args(path);
   std::vector<const char*> argv;
   argv.reserve(args.size());
@@ -129,9 +151,11 @@ bool Parser::parse_file(const std::string& path, model::ParsedModule& out) {
   }
 
   record_file(path, out);
+  note_tu_file(tu_files, path);
   // Track transitive #include dependencies so a header edit invalidates the
   // cached parse for every translation unit that pulled it in.
-  clang_getInclusions(tu, record_inclusion, &out);
+  InclusionCtx ctx{&out, tu_files};
+  clang_getInclusions(tu, record_inclusion, &ctx);
   visit_translation_unit(clang_getTranslationUnitCursor(tu), path, out);
 
   return true;
@@ -171,10 +195,12 @@ void merge_into(model::ParsedModule& out, model::ParsedModule& part,
 }  // namespace
 
 model::ParsedModule parse_files(const std::vector<std::string>& inputs,
-                                const ParseOptions& options) {
+                                const ParseOptions& options,
+                                std::vector<std::vector<std::string>>* tu_files) {
   // One result slot per input keeps the merge deterministic (input order)
   // regardless of which thread parses which file or in what order it finishes.
   std::vector<model::ParsedModule> parts(inputs.size());
+  if (tu_files != nullptr) tu_files->assign(inputs.size(), {});
 
   unsigned effective_jobs = options.jobs > 0
                                 ? static_cast<unsigned>(options.jobs)
@@ -197,7 +223,10 @@ model::ParsedModule parse_files(const std::vector<std::string>& inputs,
       // reported this way) so the run carries on with the next input.
       try {
         model::ParsedModule part;
-        parser.parse_file(inputs[i], part);
+        // Each thread writes its own slot i, so the per-TU file lists need no
+        // synchronisation despite the shared output vector.
+        parser.parse_file(inputs[i], part,
+                          tu_files != nullptr ? &(*tu_files)[i] : nullptr);
         parts[i] = std::move(part);
       } catch (const std::exception& e) {
         parts[i] = model::ParsedModule{};
