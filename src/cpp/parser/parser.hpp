@@ -23,6 +23,7 @@ struct ParseOptions {
   std::vector<std::string> extra_args;    ///< Extra compiler arguments appended verbatim.
   std::optional<std::string> compile_commands_dir;  ///< Directory holding a compile_commands.json.
   bool keep_going = true;  ///< Continue past recoverable parse errors.
+  int jobs = 0;  ///< Parse threads; `<= 0` means auto (hardware concurrency).
 };
 
 /// @brief Drives libclang over one translation unit at a time.
@@ -49,5 +50,21 @@ class Parser {
   ParseOptions options_;
   void* index_ = nullptr;  // CXIndex (opaque here to keep the header clang-free)
 };
+
+/// @brief Parses every input file and merges the per-file IR into one module.
+///
+/// Each translation unit is independent (libclang re-parses its includes from
+/// scratch), so they are parsed concurrently across up to
+/// `min(inputs, effective_jobs)` threads, each owning its own `Parser`/`CXIndex`
+/// (libclang indices must not be shared between threads, but one per thread is
+/// safe). Results are merged back in input order — deduplicating source files by
+/// path — so the output is identical and deterministic regardless of how many
+/// threads ran. `options.jobs <= 0` selects the hardware concurrency.
+///
+/// @param inputs Translation units to parse, in the order they should merge.
+/// @param options Parse configuration applied to every file.
+/// @return The merged IR for all inputs.
+model::ParsedModule parse_files(const std::vector<std::string>& inputs,
+                                const ParseOptions& options);
 
 }  // namespace clangquill::parser

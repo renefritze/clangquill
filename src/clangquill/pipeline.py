@@ -120,6 +120,7 @@ def _parse_options(config: Config, base_dir: Path) -> _core.ParseOptions:
     if config.clang_resource_dir:
         extra.append(f"-resource-dir={Path(config.clang_resource_dir).expanduser()}")
     opt.extra_args = extra
+    opt.jobs = config.jobs
     if config.compile_commands:
         opt.compile_commands_dir = str((base_dir / config.compile_commands).resolve())
     return opt

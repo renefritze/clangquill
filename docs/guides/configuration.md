@@ -22,6 +22,7 @@ The field-name-to-front-end mapping is mechanical:
 | `std` | `clangquill_std` | `"c++20"` | C++ standard, passed verbatim as `-std=<std>` (see note). |
 | `defines` | `clangquill_defines` | `[]` | `-D` preprocessor definitions (`NAME` or `NAME=value`). |
 | `clang_resource_dir` | `clangquill_clang_resource_dir` | `None` | Clang resource directory (`-resource-dir`); `None` lets clang decide. |
+| `jobs` | `clangquill_jobs` | `0` | Number of threads used to parse translation units concurrently (each input header is an independent TU). `0` auto-detects the CPU count; `1` forces a serial parse. Has no effect on the generated output. |
 
 ## Output
 

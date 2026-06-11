@@ -2,9 +2,14 @@
 
 #include <clang-c/Index.h>
 
+#include <algorithm>
+#include <atomic>
 #include <fstream>
+#include <iterator>
 #include <sstream>
+#include <thread>
 #include <unordered_set>
+#include <vector>
 
 #include "hash/sha256.hpp"
 #include "parser/ast_visitor.hpp"
@@ -129,6 +134,78 @@ bool Parser::parse_file(const std::string& path, model::ParsedModule& out) {
   visit_translation_unit(clang_getTranslationUnitCursor(tu), path, out);
 
   return true;
+}
+
+namespace {
+
+// Move-appends every element of `src` onto the end of `dst`.
+template <typename T>
+void append(std::vector<T>& dst, std::vector<T>& src) {
+  dst.insert(dst.end(), std::make_move_iterator(src.begin()),
+             std::make_move_iterator(src.end()));
+}
+
+// Merges `part` into `out` in place, deduplicating source files by path
+// (`files.path` is UNIQUE in the schema). All other rows are concatenated:
+// each translation unit only emits symbols/references physically located in its
+// own main file, so distinct inputs never collide, and symbol-keyed tables use
+// INSERT OR REPLACE on write to absorb any genuine cross-file duplicates.
+void merge_into(model::ParsedModule& out, model::ParsedModule& part,
+                std::unordered_set<std::string>& seen_files) {
+  for (auto& f : part.files) {
+    if (seen_files.insert(f.path).second) out.files.push_back(std::move(f));
+  }
+  append(out.symbols, part.symbols);
+  append(out.parameters, part.parameters);
+  append(out.template_parameters, part.template_parameters);
+  append(out.enumerators, part.enumerators);
+  append(out.references, part.references);
+  append(out.comments, part.comments);
+  append(out.comment_fields, part.comment_fields);
+  append(out.groups, part.groups);
+  append(out.group_members, part.group_members);
+  append(out.diagnostics, part.diagnostics);
+}
+
+}  // namespace
+
+model::ParsedModule parse_files(const std::vector<std::string>& inputs,
+                                const ParseOptions& options) {
+  // One result slot per input keeps the merge deterministic (input order)
+  // regardless of which thread parses which file or in what order it finishes.
+  std::vector<model::ParsedModule> parts(inputs.size());
+
+  unsigned effective_jobs = options.jobs > 0
+                                ? static_cast<unsigned>(options.jobs)
+                                : std::thread::hardware_concurrency();
+  if (effective_jobs == 0) effective_jobs = 1;
+  effective_jobs =
+      std::min<unsigned>(effective_jobs, static_cast<unsigned>(inputs.size()));
+
+  // Each worker owns its own Parser (hence its own CXIndex) and pulls the next
+  // unclaimed input until the queue drains.
+  std::atomic<std::size_t> next{0};
+  auto worker = [&]() {
+    Parser parser(options);
+    std::size_t i;
+    while ((i = next.fetch_add(1)) < inputs.size()) {
+      parser.parse_file(inputs[i], parts[i]);
+    }
+  };
+
+  if (effective_jobs <= 1) {
+    worker();  // Avoid spawning a thread for the trivial single-job case.
+  } else {
+    std::vector<std::thread> threads;
+    threads.reserve(effective_jobs);
+    for (unsigned t = 0; t < effective_jobs; ++t) threads.emplace_back(worker);
+    for (auto& t : threads) t.join();
+  }
+
+  model::ParsedModule merged;
+  std::unordered_set<std::string> seen_files;
+  for (auto& part : parts) merge_into(merged, part, seen_files);
+  return merged;
 }
 
 }  // namespace clangquill::parser

@@ -53,6 +53,9 @@ class Config:
     defines: list[str] = field(default_factory=list)
     #: Clang resource directory (``-resource-dir``); ``None`` lets clang decide.
     clang_resource_dir: str | None = None
+    #: Translation units are parsed concurrently across this many threads. ``0``
+    #: (the default) auto-detects the CPU count; ``1`` forces a serial parse.
+    jobs: int = 0
 
     # -- output ---------------------------------------------------------------
     #: Directory (under the Sphinx srcdir / CWD) that generated pages go into.
@@ -109,6 +112,9 @@ class Config:
             raise ConfigError(msg)
         if self.toctree_maxdepth < 1:
             msg = f"{CONFIG_PREFIX}toctree_maxdepth must be >= 1, got {self.toctree_maxdepth}"
+            raise ConfigError(msg)
+        if self.jobs < 0:
+            msg = f"{CONFIG_PREFIX}jobs must be >= 0 (0 = auto-detect CPU count), got {self.jobs}"
             raise ConfigError(msg)
         if not isinstance(self.templates, dict):
             msg = f"{CONFIG_PREFIX}templates must be a mapping of kind to template name"
