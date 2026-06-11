@@ -56,6 +56,14 @@ class Config:
     #: Translation units are parsed concurrently across this many threads. ``0``
     #: (the default) auto-detects the CPU count; ``1`` forces a serial parse.
     jobs: int = 0
+    #: Number of input files grouped into one libclang translation unit. Grouping
+    #: amortises the dominant parse cost — re-parsing the shared ``#include``
+    #: closure — across the batch, which speeds up cold builds dramatically.
+    #: ``0`` (the default) picks a sensible batch size; ``1`` parses every input
+    #: as its own fully isolated translation unit. Ignored (forced to ``1``) when
+    #: ``compile_commands`` is configured, because per-file compile flags cannot
+    #: be merged into one unit.
+    tu_batch: int = 0
 
     # -- output ---------------------------------------------------------------
     #: Directory (under the Sphinx srcdir / CWD) that generated pages go into.
@@ -115,6 +123,9 @@ class Config:
             raise ConfigError(msg)
         if self.jobs < 0:
             msg = f"{CONFIG_PREFIX}jobs must be >= 0 (0 = auto-detect CPU count), got {self.jobs}"
+            raise ConfigError(msg)
+        if self.tu_batch < 0:
+            msg = f"{CONFIG_PREFIX}tu_batch must be >= 0 (0 = auto, 1 = one TU per input), got {self.tu_batch}"
             raise ConfigError(msg)
         if not isinstance(self.templates, dict):
             msg = f"{CONFIG_PREFIX}templates must be a mapping of kind to template name"

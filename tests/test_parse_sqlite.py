@@ -139,6 +139,121 @@ def test_parse_tu_failure_does_not_wipe_existing_rows(tmp_path: Path) -> None:
         assert {s.qualified_name for s in store.symbols()} >= {"a", "a::f"}
 
 
+@pytest.mark.skipif(not _core.have_libclang(), reason="core built without libclang")
+def test_parse_tus_to_sqlite_replaces_multiple_units_atomically(tmp_path: Path) -> None:
+    a = tmp_path / "a.hpp"
+    a.write_text("/// ns a\nnamespace a { /// f\nint f(); }\n")
+    b = tmp_path / "b.hpp"
+    b.write_text("/// ns b\nnamespace b { /// g\nint g(); }\n")
+    c = tmp_path / "c.hpp"
+    c.write_text("/// ns c\nnamespace c { /// k\nint k(); }\n")
+    db = tmp_path / "out.sqlite"
+    _core.parse_to_sqlite([str(a), str(b)], str(db), _core.ParseOptions())
+
+    # Re-parse both stale units in one call; an untouched third input joins in.
+    a.write_text("/// ns a\nnamespace a { /// h\nint h(); }\n")
+    result = _core.parse_tus_to_sqlite([str(a), str(c)], str(db), _core.ParseOptions())
+    assert [tu.input for tu in result.translation_units] == [str(a), str(c)]
+
+    with Store.open(db) as store:
+        names = {s.qualified_name for s in store.symbols()}
+    assert "a::f" not in names
+    assert {"a::h", "b::g", "c::k"}.issubset(names)
+
+
+@pytest.mark.skipif(not _core.have_libclang(), reason="core built without libclang")
+def test_parse_tus_does_not_wipe_an_included_sibling_input(tmp_path: Path) -> None:
+    # base.hpp is itself an input *and* #included by user.hpp. Re-parsing only
+    # user.hpp must leave base.hpp's symbols intact even though base.hpp appears
+    # in user.hpp's file set.
+    base = tmp_path / "base.hpp"
+    base.write_text("#pragma once\n/// ns base\nnamespace base { /// id\nusing Id = int; }\n")
+    user = tmp_path / "user.hpp"
+    user.write_text('#include "base.hpp"\n/// ns user\nnamespace user { /// u\nbase::Id u(); }\n')
+    db = tmp_path / "out.sqlite"
+    _core.parse_to_sqlite([str(base), str(user)], str(db), _core.ParseOptions())
+
+    user.write_text('#include "base.hpp"\n/// ns user\nnamespace user { /// v\nbase::Id v(); }\n')
+    _core.parse_tus_to_sqlite([str(user)], str(db), _core.ParseOptions())
+
+    with Store.open(db) as store:
+        names = {s.qualified_name for s in store.symbols()}
+    assert {"base", "base::Id", "user", "user::v"}.issubset(names)
+    assert "user::u" not in names
+
+
+BATCH_FIXTURE_ONE = """
+/// \\defgroup util Utilities
+/// Helpers shared by everything.
+
+/// A documented macro.
+#define ONE_MAX(a, b) ((a) > (b) ? (a) : (b))
+
+/// \\ingroup util
+/// A grouped function.
+int clamp_one(int x);
+"""
+
+BATCH_FIXTURE_TWO = """
+/// Another documented macro.
+#define TWO_MIN(a, b) ((a) < (b) ? (a) : (b))
+
+/// ns two
+namespace two { /// widget
+struct Widget { int w; }; }
+"""
+
+
+@pytest.mark.skipif(not _core.have_libclang(), reason="core built without libclang")
+def test_batched_parse_extracts_macros_and_groups_per_file(tmp_path: Path) -> None:
+    # Macro doc comments and free-floating \defgroup blocks are recovered by
+    # scanning each input's tokens; with several inputs sharing one umbrella TU
+    # every member file must still be scanned (and line numbers must not collide
+    # across files).
+    one = tmp_path / "one.hpp"
+    one.write_text(BATCH_FIXTURE_ONE)
+    two = tmp_path / "two.hpp"
+    two.write_text(BATCH_FIXTURE_TWO)
+    db = tmp_path / "out.sqlite"
+
+    opts = _core.ParseOptions()
+    assert opts.tu_batch == 0  # default batching groups both inputs into one TU
+    _core.parse_to_sqlite([str(one), str(two)], str(db), opts)
+
+    with Store.open(db) as store:
+        by_name = {s.qualified_name: s for s in store.symbols()}
+        documented = {s.qualified_name for s in store.symbols() if s.is_documented}
+        groups = {g.id: g for g in store.groups()}
+
+    assert {"ONE_MAX", "TWO_MIN", "clamp_one", "two::Widget"}.issubset(by_name)
+    assert {"ONE_MAX", "TWO_MIN"}.issubset(documented)
+    assert "util" in groups
+    assert groups["util"].title == "Utilities"
+
+
+@pytest.mark.skipif(not _core.have_libclang(), reason="core built without libclang")
+def test_batched_parse_matches_per_file_parse(tmp_path: Path) -> None:
+    # For self-contained headers the umbrella batching is an optimisation only:
+    # the stored IR must be identical to fully isolated per-file parsing.
+    headers = []
+    for i in range(5):
+        header = tmp_path / f"h{i}.hpp"
+        header.write_text(
+            f"/// widget {i}\nnamespace n{i} {{ /// w\nstruct W{i} {{ int f{i}; }}; /// fn\nint fn{i}(int a); }}\n",
+        )
+        headers.append(str(header))
+
+    def rows(db_name: str, tu_batch: int) -> list[tuple]:
+        opts = _core.ParseOptions()
+        opts.tu_batch = tu_batch
+        db = tmp_path / db_name
+        _core.parse_to_sqlite(headers, str(db), opts)
+        with Store.open(db) as store:
+            return sorted((s.usr, s.qualified_name, s.kind, s.is_documented, s.content_hash) for s in store.symbols())
+
+    assert rows("batched.sqlite", 0) == rows("isolated.sqlite", 1)
+
+
 def test_schema_version_exposed() -> None:
     assert isinstance(_core.SCHEMA_VERSION, int)
     assert _core.SCHEMA_VERSION >= 1

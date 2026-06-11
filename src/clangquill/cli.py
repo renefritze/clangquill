@@ -121,6 +121,10 @@ def build(  # noqa: PLR0913
         int,
         typer.Option("--jobs", "-j", help="Parse threads (0 = auto-detect CPU count, 1 = serial)."),
     ] = 0,
+    tu_batch: Annotated[
+        int,
+        typer.Option("--tu-batch", help="Inputs grouped per translation unit (0 = auto, 1 = one TU per input)."),
+    ] = 0,
 ) -> None:
     """Parse C++ inputs and generate MyST Markdown into the output directory."""
     config = Config(
@@ -139,6 +143,7 @@ def build(  # noqa: PLR0913
         group_by=group_by,
         toctree_maxdepth=toctree_maxdepth,
         jobs=jobs,
+        tu_batch=tu_batch,
     )
     try:
         config.validate()

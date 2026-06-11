@@ -137,7 +137,7 @@ TEST_CASE("SqliteStore write/read round-trips the IR", "[store]") {
   std::remove(path.c_str());
 }
 
-TEST_CASE("SqliteStore write_tu replaces only the re-parsed file's rows",
+TEST_CASE("SqliteStore write_tus replaces only the re-parsed file's rows",
           "[store]") {
   // Two files in the IR: one to re-parse, one that must survive untouched.
   model::ParsedModule original;
@@ -186,13 +186,21 @@ TEST_CASE("SqliteStore write_tu replaces only the re-parsed file's rows",
   }
 
   // Re-parse a.hpp: its old symbol is dropped and a new one takes its place,
-  // with a refreshed file hash. b.hpp is not part of this module at all.
+  // with a refreshed file hash. b.hpp appears in the module's *file* list —
+  // exactly what happens when the re-parsed unit #includes another input — and
+  // its rows must survive because it is not in the replaced set.
   model::ParsedModule reparse;
   model::SourceFile a2;
   a2.path = "/tmp/a.hpp";
   a2.sha256 = std::string(64, 'c');
   a2.size_bytes = 9;
   reparse.files.push_back(a2);
+
+  model::SourceFile b2;
+  b2.path = "/tmp/b.hpp";
+  b2.sha256 = std::string(64, 'b');
+  b2.size_bytes = 2;
+  reparse.files.push_back(b2);
 
   model::Symbol an;
   an.usr = "c:@F@a_new";
@@ -205,7 +213,8 @@ TEST_CASE("SqliteStore write_tu replaces only the re-parsed file's rows",
 
   {
     store::SqliteStore writer(path);
-    REQUIRE_NOTHROW(writer.write_tu(reparse, store::Meta::current()));
+    REQUIRE_NOTHROW(
+        writer.write_tus(reparse, store::Meta::current(), {"/tmp/a.hpp"}));
   }
 
   store::SqliteStore reader(path);

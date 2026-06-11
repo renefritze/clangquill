@@ -3,6 +3,7 @@
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include "hash/content_hash.hpp"
 #include "parser/comment_parser.hpp"
@@ -13,10 +14,17 @@
 namespace clangquill::parser {
 namespace {
 
+// Comment blocks keyed by (file path, line) of the source line each block
+// immediately precedes; used to attach doc comments to macros, which libclang
+// does not associate itself. Keyed per file because an umbrella translation
+// unit extracts from several files whose line numbers collide.
+using DocAboveLine = std::map<std::pair<std::string, unsigned>, std::string>;
+
 struct VisitCtx {
   model::ParsedModule* mod;
   std::string parent_usr;
-  std::string main_file;
+  const std::unordered_set<std::string>* main_files;
+  bool trust_main_file;
   // De-dup of symbols/comments by USR, and parameters collected per function
   // so content_hash can include them.
   std::unordered_set<std::string>* seen_symbols;
@@ -24,17 +32,17 @@ struct VisitCtx {
   std::unordered_map<std::string, std::vector<model::FunctionParameter>>*
       params_by_func;
   std::unordered_set<std::string>* seen_groups;
-  // Comment block text keyed by the source line it immediately precedes; used to
-  // attach doc comments to macros, which libclang does not associate itself.
-  std::map<unsigned, std::string>* doc_above_line;
+  DocAboveLine* doc_above_line;
   const ICommentParser* comment_parser;
 };
 
-unsigned cursor_line(CXCursor c) {
+std::pair<std::string, unsigned> cursor_file_line(CXCursor c) {
+  CXFile file = nullptr;
   unsigned line = 0, col = 0, off = 0;
-  clang_getSpellingLocation(clang_getCursorLocation(c), nullptr, &line, &col,
+  clang_getSpellingLocation(clang_getCursorLocation(c), &file, &line, &col,
                             &off);
-  return line;
+  std::string path = file != nullptr ? to_string(clang_getFileName(file)) : "";
+  return {std::move(path), line};
 }
 
 bool is_record(model::SymbolKind k) {
@@ -133,7 +141,7 @@ std::string handle_symbol(CXCursor c, model::SymbolKind kind, VisitCtx& ctx) {
   // comment written immediately above the `#define` from the token scan.
   if (raw.empty() && kind == model::SymbolKind::Macro &&
       ctx.doc_above_line != nullptr) {
-    auto it = ctx.doc_above_line->find(cursor_line(c));
+    auto it = ctx.doc_above_line->find(cursor_file_line(c));
     if (it != ctx.doc_above_line->end()) raw = it->second;
   }
   if (!raw.empty() && ctx.documented->insert(usr).second) {
@@ -534,13 +542,19 @@ unsigned token_line(CXTranslationUnit tu, CXToken token, bool end) {
   return line;
 }
 
-// Tokenizes the main file and feeds free-floating comment blocks to the group
+// Tokenizes one source file and feeds free-floating comment blocks to the group
 // scanner so `\defgroup` definitions (and their following description lines)
 // become group rows. Consecutive line comments (`///`) tokenize separately, so
 // line-adjacent comment tokens are merged back into one block first.
-void scan_free_comments(CXCursor tu_cursor, VisitCtx& ctx) {
-  CXTranslationUnit tu = clang_Cursor_getTranslationUnit(tu_cursor);
-  CXSourceRange range = clang_getCursorExtent(tu_cursor);
+void scan_free_comments(CXTranslationUnit tu, CXFile file, VisitCtx& ctx) {
+  std::size_t size = 0;
+  if (clang_getFileContents(tu, file, &size) == nullptr || size == 0) return;
+  CXSourceLocation begin = clang_getLocationForOffset(tu, file, 0);
+  CXSourceLocation end =
+      clang_getLocationForOffset(tu, file, static_cast<unsigned>(size));
+  CXSourceRange range = clang_getRange(begin, end);
+  std::string file_name = to_string(clang_getFileName(file));
+
   CXToken* tokens = nullptr;
   unsigned count = 0;
   clang_tokenize(tu, range, &tokens, &count);
@@ -551,7 +565,9 @@ void scan_free_comments(CXCursor tu_cursor, VisitCtx& ctx) {
     if (block.empty()) return;
     scan_group_definitions(block, ctx);
     // Record the block against the line it precedes, for macro doc lookup.
-    if (ctx.doc_above_line != nullptr) (*ctx.doc_above_line)[last_line + 1] = block;
+    if (ctx.doc_above_line != nullptr) {
+      (*ctx.doc_above_line)[{file_name, last_line + 1}] = block;
+    }
     block.clear();
   };
   for (unsigned t = 0; t < count; ++t) {
@@ -570,7 +586,9 @@ void scan_free_comments(CXCursor tu_cursor, VisitCtx& ctx) {
 CXChildVisitResult visit(CXCursor c, CXCursor /*parent*/, CXClientData data) {
   auto& ctx = *static_cast<VisitCtx*>(data);
 
-  if (!in_file(c, ctx.main_file)) return CXChildVisit_Continue;
+  if (!in_file(c, *ctx.main_files, ctx.trust_main_file)) {
+    return CXChildVisit_Continue;
+  }
 
   model::SymbolKind kind = map_kind(clang_getCursorKind(c));
   if (kind == model::SymbolKind::Unknown) return CXChildVisit_Continue;
@@ -598,18 +616,31 @@ CXChildVisitResult visit(CXCursor c, CXCursor /*parent*/, CXClientData data) {
 
 void visit_translation_unit(CXCursor tu_cursor, const std::string& main_file,
                             model::ParsedModule& out) {
+  visit_translation_unit(tu_cursor, std::vector<std::string>{main_file},
+                         /*trust_main_file=*/true, out);
+}
+
+void visit_translation_unit(CXCursor tu_cursor,
+                            const std::vector<std::string>& main_files,
+                            bool trust_main_file, model::ParsedModule& out) {
+  CXTranslationUnit tu = clang_Cursor_getTranslationUnit(tu_cursor);
+
   std::unordered_set<std::string> seen_symbols;
   std::unordered_set<std::string> documented;
   std::unordered_set<std::string> seen_groups;
-  std::map<unsigned, std::string> doc_above_line;
+  DocAboveLine doc_above_line;
   std::unordered_map<std::string, std::vector<model::FunctionParameter>>
       params_by_func;
   DoxygenCommentParser comment_parser;
 
+  std::unordered_set<std::string> main_set(main_files.begin(),
+                                           main_files.end());
+
   VisitCtx ctx;
   ctx.mod = &out;
   ctx.parent_usr = "";
-  ctx.main_file = main_file;
+  ctx.main_files = &main_set;
+  ctx.trust_main_file = trust_main_file;
   ctx.seen_symbols = &seen_symbols;
   ctx.documented = &documented;
   ctx.params_by_func = &params_by_func;
@@ -619,7 +650,18 @@ void visit_translation_unit(CXCursor tu_cursor, const std::string& main_file,
 
   // Capture free-floating `\defgroup` blocks first so groups carry their title
   // and description before any `\ingroup` membership creates a stub for them.
-  scan_free_comments(tu_cursor, ctx);
+  // Each accepted file is scanned once (different spellings of the same file
+  // dedupe on libclang's own name for it), and that name joins the filter set
+  // so cursor locations match however libclang spells the path.
+  std::unordered_set<std::string> scanned;
+  for (const auto& mf : main_files) {
+    CXFile file = clang_getFile(tu, mf.c_str());
+    if (file == nullptr) continue;
+    std::string name = to_string(clang_getFileName(file));
+    if (!scanned.insert(name).second) continue;
+    main_set.insert(name);
+    scan_free_comments(tu, file, ctx);
+  }
 
   clang_visitChildren(tu_cursor, visit, &ctx);
 

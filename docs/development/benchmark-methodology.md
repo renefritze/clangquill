@@ -163,20 +163,18 @@ precise about the cache's current behaviour. With a `--cache-dir` configured:
 
 - An **unchanged** rebuild (noop) skips the libclang parse entirely and rewrites
   no pages — this is the win the noop scenario exists to demonstrate.
-- A **changed** rebuild (incremental) re-parses the **whole** module, because
-  the parse cache is all-or-nothing today: any changed input (or transitive
-  include) invalidates the cached IR. Only the page *writes* are incremental —
-  unchanged pages are not rewritten.
+- A **changed** rebuild (incremental) re-parses only the translation units whose
+  transitive include closure contains a changed file, merging them into the
+  existing IR (in parallel, like a full parse). Only the page *writes* for
+  changed content happen; unchanged pages are not rewritten.
 
-This is why the incremental scenario currently tracks the cold parse cost rather
-than the noop cost. Per-translation-unit incremental parsing — re-parsing only
-the changed TUs and merging them into the existing IR — is tracked as future
-work in
-[issue #66](https://github.com/renefritze/clangquill/issues/66), with related
-performance follow-ups in
-[#67–#70](https://github.com/renefritze/clangquill/issues?q=is%3Aissue+is%3Aopen+label%3Aperformance).
-The methodology deliberately documents the present state so the published
-numbers are not read as promising something the implementation does not yet do.
+One caveat keeps the incremental scenario from tracking the noop cost on every
+repo: the configured patch targets are deliberately *widely included* headers
+(`string_view.h`, `Matrix.h`, …), so their stale set can legitimately approach
+the whole module. That is correct invalidation, not a missing optimisation —
+repos where the edit touches a leaf header see a stale set of one. The
+methodology deliberately documents this so the published numbers are read
+against what the implementation actually promises.
 
 ## Caveats
 

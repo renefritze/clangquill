@@ -36,15 +36,44 @@ void SqliteStore::write(const model::ParsedModule& module, const Meta& meta) {
   tx.commit();
 }
 
-void SqliteStore::write_tu(const model::ParsedModule& module, const Meta& meta) {
+void SqliteStore::write_tus(const model::ParsedModule& module, const Meta& meta,
+                            const std::vector<std::string>& replaced_files) {
   Transaction tx(db_);
   put_meta(meta);
   // Upsert so files shared with other TUs keep their id (and the symbols other
   // TUs anchored to them survive); a changed file simply refreshes its hash.
   FileIds file_ids = upsert_files(module);
-  delete_files_rows(file_ids);
+  // Delete only the rows of the re-parsed inputs, never of files that merely
+  // appear in the module because a re-parsed unit #includes them — those may be
+  // other inputs whose symbols are not part of this partial module at all.
+  delete_files_rows(replaced_ids(module, replaced_files, file_ids));
   insert_rows(module, file_ids);
   tx.commit();
+}
+
+SqliteStore::FileIds SqliteStore::replaced_ids(
+    const model::ParsedModule& module,
+    const std::vector<std::string>& replaced_files, const FileIds& known) {
+  FileIds doomed;
+  Stmt lookup(db_, "SELECT id FROM files WHERE path = ?;");
+  auto add = [&](const std::string& path) {
+    if (path.empty() || doomed.count(path) != 0) return;
+    if (auto it = known.find(path); it != known.end()) {
+      doomed.emplace(path, it->second);
+      return;
+    }
+    // A spelling the fresh module does not carry (e.g. libclang named the file
+    // differently last time): resolve it from the DB so its stale rows still
+    // get replaced rather than lingering next to the new ones.
+    lookup.reset();
+    lookup.bind(1, path);
+    if (lookup.step()) doomed.emplace(path, lookup.column_int64(0));
+  };
+  for (const auto& path : replaced_files) add(path);
+  // The fresh symbols' anchor files are replaced too, covering any difference
+  // between the caller's input spelling and libclang's name for the same file.
+  for (const auto& sym : module.symbols) add(sym.location.file_path);
+  return doomed;
 }
 
 void SqliteStore::put_meta(const Meta& meta) {

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "model/module.hpp"
 #include "store/sqlite_raii.hpp"
@@ -42,18 +43,25 @@ class SqliteStore {
   /// @param meta Metadata stored alongside the IR.
   void write(const model::ParsedModule& module, const Meta& meta);
 
-  /// @brief Re-writes a single translation unit's rows into an existing DB.
+  /// @brief Re-writes the re-parsed translation units' rows into an existing DB.
   ///
-  /// Replaces only the IR sourced from @p module's files: every `symbols` row
-  /// whose `file_id` belongs to one of those files (and, via the schema's
-  /// `ON DELETE CASCADE` chain, that symbol's parameters, references, comments
-  /// and group memberships) is deleted, then @p module is inserted afresh. Rows
-  /// owned by other translation units are left untouched, so touching one input
-  /// re-parses only that input rather than the whole module.
+  /// Replaces only the IR sourced from @p replaced_files (plus any file the
+  /// fresh @p module anchors a symbol to): every `symbols` row whose `file_id`
+  /// belongs to one of those files (and, via the schema's `ON DELETE CASCADE`
+  /// chain, that symbol's parameters, references, comments and group
+  /// memberships) is deleted, then @p module is inserted afresh. Rows owned by
+  /// other translation units are left untouched — including symbols of inputs
+  /// that merely appear in @p module's *file* list because a re-parsed unit
+  /// `#include`s them — so touching one input re-parses only that input rather
+  /// than the whole module. File rows (path, hash, size) are upserted for the
+  /// whole module so changed dependencies refresh their hashes.
   ///
-  /// @param module The single-TU IR to persist (its files plus their symbols).
+  /// @param module The freshly re-parsed IR (its files plus their symbols).
   /// @param meta Metadata refreshed alongside the IR.
-  void write_tu(const model::ParsedModule& module, const Meta& meta);
+  /// @param replaced_files The inputs whose rows must be replaced wholesale,
+  ///        even when their re-parse produced no symbols.
+  void write_tus(const model::ParsedModule& module, const Meta& meta,
+                 const std::vector<std::string>& replaced_files);
 
   /// @brief Reconstructs a ParsedModule from the database.
   /// @return The IR read back from storage.
@@ -69,6 +77,10 @@ class SqliteStore {
   FileIds insert_files(const model::ParsedModule& module);
   /// Upserts @p module's files (insert-or-update on path) and returns their ids.
   FileIds upsert_files(const model::ParsedModule& module);
+  /// Resolves the ids of the files whose rows a write_tus call must replace.
+  FileIds replaced_ids(const model::ParsedModule& module,
+                       const std::vector<std::string>& replaced_files,
+                       const FileIds& known);
   /// Deletes every symbol (and cascaded child rows) sourced from @p file_ids.
   void delete_files_rows(const FileIds& file_ids);
   /// Inserts all non-file IR rows (symbols, params, refs, comments, groups, …).

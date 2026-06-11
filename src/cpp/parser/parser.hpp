@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -24,6 +25,12 @@ struct ParseOptions {
   std::optional<std::string> compile_commands_dir;  ///< Directory holding a compile_commands.json.
   bool keep_going = true;  ///< Continue past recoverable parse errors.
   int jobs = 0;  ///< Parse threads; `<= 0` means auto (hardware concurrency).
+  /// Inputs grouped into one umbrella translation unit. Grouping amortises the
+  /// dominant parse cost — re-lexing the shared `#include` closure — across the
+  /// batch. `0` selects a default batch size; `1` parses every input as its own
+  /// translation unit. Forced to `1` when `compile_commands_dir` is set, since
+  /// per-file compile flags cannot be merged into one unit.
+  int tu_batch = 0;
 };
 
 /// @brief Drives libclang over one translation unit at a time.
@@ -50,32 +57,64 @@ class Parser {
   bool parse_file(const std::string& path, model::ParsedModule& out,
                   std::vector<std::string>* tu_files = nullptr);
 
+  /// @brief Parses a batch of inputs as one umbrella translation unit.
+  ///
+  /// A synthetic in-memory main file `#include`s every member, so the shared
+  /// transitive include closure is lexed and parsed once for the whole batch
+  /// instead of once per input. Only declarations physically located in the
+  /// member files are extracted, so the result matches per-file parsing for
+  /// self-contained headers. A batch of one delegates to @ref parse_file. If
+  /// the umbrella itself cannot be created, every member is re-parsed
+  /// individually as a fallback.
+  ///
+  /// @param paths The batch members, in input order.
+  /// @param out Module that extracted rows are appended to.
+  /// @param member_files Optional sink (sized to @p paths) receiving each
+  ///        member's file set — the member plus its transitive `#include`s,
+  ///        recovered exactly from the preprocessing record even when an
+  ///        include was guard-skipped because a sibling pulled it in first.
+  /// @param member_ok Optional sink (sized to @p paths) flagging members whose
+  ///        translation unit (or umbrella inclusion) hard-failed as `false`.
+  /// @return `false` when any member hard-failed.
+  bool parse_batch(const std::vector<std::string>& paths,
+                   model::ParsedModule& out,
+                   std::vector<std::vector<std::string>>* member_files = nullptr,
+                   std::vector<bool>* member_ok = nullptr);
+
  private:
   std::vector<std::string> build_args(const std::string& path) const;
 
   ParseOptions options_;
   void* index_ = nullptr;  // CXIndex (opaque here to keep the header clang-free)
+  // Lazily-loaded compile_commands.json reader, shared across this parser's
+  // translation units (mutable: caching it does not change observable state).
+  mutable std::unique_ptr<class CompileDb> compile_db_;
 };
 
-/// @brief Parses every input file and merges the per-file IR into one module.
+/// @brief Parses every input file and merges the per-batch IR into one module.
 ///
-/// Each translation unit is independent (libclang re-parses its includes from
-/// scratch), so they are parsed concurrently across up to
-/// `min(inputs, effective_jobs)` threads, each owning its own `Parser`/`CXIndex`
-/// (libclang indices must not be shared between threads, but one per thread is
-/// safe). Results are merged back in input order — deduplicating source files by
-/// path — so the output is identical and deterministic regardless of how many
+/// Inputs are grouped into batches of `options.tu_batch` (see ParseOptions) and
+/// each batch is parsed as one umbrella translation unit, so the shared
+/// `#include` closure is parsed once per batch rather than once per input.
+/// Batches are parsed concurrently across up to `min(batches, effective_jobs)`
+/// threads, each owning its own `Parser`/`CXIndex` (libclang indices must not
+/// be shared between threads, but one per thread is safe). Batch composition
+/// depends only on the input order — never on the job count — and results merge
+/// back in batch order, so the output is deterministic regardless of how many
 /// threads ran. `options.jobs <= 0` selects the hardware concurrency.
 ///
 /// @param inputs Translation units to parse, in the order they should merge.
 /// @param options Parse configuration applied to every file.
 /// @param tu_files Optional sink, sized to and indexed by @p inputs, receiving
-///        each translation unit's full file set (its main file plus every
-///        transitive `#include`). Lets a caller attribute every dependency to
-///        the input that pulled it in for per-TU incremental re-parses.
+///        each input's file set (the input plus every transitive `#include`).
+///        Lets a caller attribute every dependency to the input that pulled it
+///        in for per-TU incremental re-parses.
+/// @param tu_parsed Optional sink, sized to and indexed by @p inputs, flagging
+///        inputs whose translation unit hard-failed as `false`.
 /// @return The merged IR for all inputs.
 model::ParsedModule parse_files(const std::vector<std::string>& inputs,
                                 const ParseOptions& options,
-                                std::vector<std::vector<std::string>>* tu_files = nullptr);
+                                std::vector<std::vector<std::string>>* tu_files = nullptr,
+                                std::vector<bool>* tu_parsed = nullptr);
 
 }  // namespace clangquill::parser
