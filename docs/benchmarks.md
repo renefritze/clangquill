@@ -2,14 +2,74 @@
 
 # Benchmarks
 
-ClangQuill vs Doxygen performance, measured by the harness in
-[`benchmarks/`](https://github.com/renefritze/clangquill/tree/main/benchmarks).
-The parse (`clangquill build` → MyST, vs `doxygen` XML) and render
-(`sphinx-build` → HTML, vs `doxygen` HTML) stages are timed separately across
-cold / no-op / incremental scenarios.
+- Generated: `2026-06-11T08:44:31.955463+00:00`
+- Machine: Linux-6.17.0-1015-azure-x86_64-with-glibc2.39 · 4 CPU · 16.8 GB RAM
+- clangquill: `clangquill 0.2.0` · libclang `clang version 22.1.7 (https://github.com/llvm/llvm-project a255c1ed36a1d06f79bd2633ba9f8d900153007c)`
+- doxygen: `1.9.8` · sphinx: `sphinx-build 9.1.0`
+- repeat=3 warmup=1 (median wall-clock seconds)
 
-These figures are regenerated and published automatically by the `benchmark`
-GitHub Actions workflow, which opens a pull request against `main` with the
-refreshed numbers.
+## abseil
+_ref: 20240722.0 · commit: `4447c7562e3b`_
 
-_No benchmark results have been published yet._
+| stage | cold | noop | incremental |
+| --- | --- | --- | --- |
+| clangquill-myst | 9.699 | 0.499 | 9.712 |
+| clangquill-sphinx | 4.358 | 4.401 | 4.316 |
+| doxygen-xml | 0.474 | 0.485 | 0.490 |
+| doxygen-html | 0.600 | 0.630 | 0.631 |
+
+- **cold** — parse: clangquill-myst 9.699s vs doxygen-xml 0.474s (0.05× ); full HTML: clangquill 14.057s vs doxygen-html 0.600s (0.04× )
+- **noop** — parse: clangquill-myst 0.499s vs doxygen-xml 0.485s (0.97× ); full HTML: clangquill 4.900s vs doxygen-html 0.630s (0.13× )
+- **incremental** — parse: clangquill-myst 9.712s vs doxygen-xml 0.490s (0.05× ); full HTML: clangquill 14.029s vs doxygen-html 0.631s (0.04× )
+- **clangquill cache** — cold→noop 19.5× faster, cold→incremental 1.0× faster
+- **work (cold)** — clangquill-myst: 1975 symbols from 438 files → 77 pages, output 79 files · 274.0 KB; doxygen-xml: output 286 files · 7.4 MB; doxygen-html: output 638 files · 9.4 MB
+- **non-zero exits** — clangquill-sphinx/cold=2; clangquill-sphinx/noop=2; clangquill-sphinx/incremental=2 (diagnostics in logs; the work figures above show the achieved coverage)
+
+## clangquill
+_ref: (local working tree) · commit: `18f4b487afa6`_
+
+| stage | cold | noop | incremental |
+| --- | --- | --- | --- |
+| clangquill-myst | 2.713 | 0.235 | 2.706 |
+| clangquill-sphinx | 1.712 | 0.663 | 0.756 |
+| doxygen-xml | 0.077 | 0.080 | 0.079 |
+| doxygen-html | 0.120 | 0.128 | 0.134 |
+
+- **cold** — parse: clangquill-myst 2.713s vs doxygen-xml 0.077s (0.03× ); full HTML: clangquill 4.425s vs doxygen-html 0.120s (0.03× )
+- **noop** — parse: clangquill-myst 0.235s vs doxygen-xml 0.080s (0.34× ); full HTML: clangquill 0.897s vs doxygen-html 0.128s (0.14× )
+- **incremental** — parse: clangquill-myst 2.706s vs doxygen-xml 0.079s (0.03× ); full HTML: clangquill 3.463s vs doxygen-html 0.134s (0.04× )
+- **clangquill cache** — cold→noop 11.6× faster, cold→incremental 1.0× faster
+- **work (cold)** — clangquill-myst: 274 symbols from 192 files → 1 pages, output 3 files · 38.6 KB; doxygen-xml: output 70 files · 678.5 KB; doxygen-html: output 167 files · 1.4 MB
+
+## dune-gdt
+_ref: b51af5ba309da83a234174ca916df029f53e3d15 · commit: `b51af5ba309d`_
+
+| stage | cold | noop | incremental |
+| --- | --- | --- | --- |
+| clangquill-myst | 2.008 | 0.221 | 2.017 |
+| clangquill-sphinx | 1.214 | 0.648 | 0.647 |
+| doxygen-xml | 0.127 | 0.130 | 0.130 |
+| doxygen-html | 0.169 | 0.173 | 0.174 |
+
+- **cold** — parse: clangquill-myst 2.008s vs doxygen-xml 0.127s (0.06× ); full HTML: clangquill 3.221s vs doxygen-html 0.169s (0.05× )
+- **noop** — parse: clangquill-myst 0.221s vs doxygen-xml 0.130s (0.59× ); full HTML: clangquill 0.869s vs doxygen-html 0.173s (0.20× )
+- **incremental** — parse: clangquill-myst 2.017s vs doxygen-xml 0.130s (0.06× ); full HTML: clangquill 2.664s vs doxygen-html 0.174s (0.07× )
+- **clangquill cache** — cold→noop 9.1× faster, cold→incremental 1.0× faster
+- **work (cold)** — clangquill-myst: 100 symbols from 517 files → 8 pages, output 10 files · 20.7 KB; doxygen-xml: output 53 files · 605.4 KB; doxygen-html: output 124 files · 1.1 MB
+
+## eigen
+_ref: 3.4.0 · commit: `3147391d946b`_
+
+| stage | cold | noop | incremental |
+| --- | --- | --- | --- |
+| clangquill-myst | 2.721 | 1.014 | 2.649 |
+| clangquill-sphinx | 10.652 | 10.590 | 10.582 |
+| doxygen-xml | 7.603 | 7.740 | 7.736 |
+| doxygen-html | 8.083 | 8.273 | 8.334 |
+
+- **cold** — parse: clangquill-myst 2.721s vs doxygen-xml 7.603s (2.79× ); full HTML: clangquill 13.373s vs doxygen-html 8.083s (0.60× )
+- **noop** — parse: clangquill-myst 1.014s vs doxygen-xml 7.740s (7.63× ); full HTML: clangquill 11.605s vs doxygen-html 8.273s (0.71× )
+- **incremental** — parse: clangquill-myst 2.649s vs doxygen-xml 7.736s (2.92× ); full HTML: clangquill 13.231s vs doxygen-html 8.334s (0.63× )
+- **clangquill cache** — cold→noop 2.7× faster, cold→incremental 1.0× faster
+- **work (cold)** — clangquill-myst: 5505 symbols from 389 files → 1030 pages, output 1032 files · 934.1 KB; doxygen-xml: output 1860 files · 45.2 MB; doxygen-html: output 4023 files · 77.1 MB
+- **non-zero exits** — clangquill-sphinx/cold=2; clangquill-sphinx/noop=2; clangquill-sphinx/incremental=2 (diagnostics in logs; the work figures above show the achieved coverage)
