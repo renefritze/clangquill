@@ -95,8 +95,9 @@ handicapped by a serial constraint:
 
 - **ClangQuill** defaults to `jobs = 0`, which resolves to
   `std::thread::hardware_concurrency()` at parse time.
-- **Sphinx** is invoked with `-j auto`, which uses `os.cpu_count()` worker
-  processes for the render stage.
+- **Sphinx** is invoked with `-j auto`, which uses `multiprocessing.cpu_count()`
+  worker processes for the render stage (requires Sphinx ≥ 1.7; not supported
+  on Windows).
 - **Doxygen** has `NUM_PROC_THREADS = 0` in the generated Doxyfile, which
   instructs Doxygen ≥ 1.9 to use all available CPU cores.
 
