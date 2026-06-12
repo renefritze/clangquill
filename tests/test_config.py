@@ -179,7 +179,10 @@ def test_validate_rejects_templates_with_non_str_values():
         cfg.validate()
 
 
-def test_validate_rejects_non_list_input():
-    cfg = Config(input="a.hpp")
+# Falsy wrong types (0, {}) must report the type error, not the emptiness error,
+# proving type validation runs before the "at least one file" check.
+@pytest.mark.parametrize("bad_input", ["a.hpp", 0, {}])
+def test_validate_rejects_non_list_input(bad_input: object):
+    cfg = Config(input=bad_input)
     with pytest.raises(ConfigError, match="input must be a list of strings"):
         cfg.validate()

@@ -155,10 +155,10 @@ class Config:
         Raises :class:`ConfigError` with an actionable message on the first
         problem found.
         """
+        self._validate_types()
         if not self.input:
             msg = f"{CONFIG_PREFIX}input must list at least one C++ file to parse"
             raise ConfigError(msg)
-        self._validate_types()
         if not self.std:
             msg = f"{CONFIG_PREFIX}std must be a non-empty C++ standard, e.g. 'c++20'"
             raise ConfigError(msg)
