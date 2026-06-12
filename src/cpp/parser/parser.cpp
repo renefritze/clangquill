@@ -27,7 +27,11 @@ CXIndex as_index(void* p) { return static_cast<CXIndex>(p); }
 // Inputs grouped per umbrella translation unit when ParseOptions::tu_batch is
 // 0 (auto). Fixed — independent of the job count — so the batch composition,
 // and with it the extracted IR, is identical no matter how many threads run.
-constexpr std::size_t kDefaultTuBatch = 16;
+// 64 measured 2-3x faster cold than 16 on abseil/eigen and beat a shared
+// common-header PCH at every parallelism level (#90); going wider kept paying
+// on abseil but regressed eigen and starves small projects of parallel
+// batches.
+constexpr std::size_t kDefaultTuBatch = 64;
 
 // RAII guard so the translation unit is disposed on every exit path,
 // including exceptions thrown while collecting diagnostics or visiting.
