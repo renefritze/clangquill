@@ -8,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from clangquill import _core, cli, pipeline
+from clangquill.cache import BuildCache
 from clangquill.config import Config
 from clangquill.pipeline import MANIFEST_NAME, build
 from clangquill.store import Store
@@ -219,6 +220,69 @@ def test_incremental_touch_header_regenerates_only_affected(project: Path) -> No
     assert after["alpha.md"] != before["alpha.md"]
     assert after["beta.md"] == before["beta.md"]
     assert after["index.md"] == before["index.md"]
+
+
+@requires_libclang
+def test_incremental_page_cache_replays_unchanged_pages(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Editing one header must re-render only its page; every other page replays
+    # its text from the page cache instead of running Jinja again.
+    (project / "alpha.hpp").write_text("/// alpha ns\nnamespace alpha { /// f\nint f(); }\n")
+    (project / "beta.hpp").write_text("/// beta ns\nnamespace beta { /// g\nint g(); }\n")
+    config = Config(input=["alpha.hpp", "beta.hpp"], output_dir="api", cache_dir=".cache")
+    build(config, base_dir=project)
+
+    # Spy on the memoisation decision: which page stems hit the cache vs miss.
+    hits: list[str] = []
+    misses: list[str] = []
+    real = BuildCache.cached_page
+
+    def spy(self: BuildCache, stem: str, key: str) -> str | None:
+        text = real(self, stem, key)
+        (hits if text is not None else misses).append(stem)
+        return text
+
+    monkeypatch.setattr(BuildCache, "cached_page", spy)
+
+    (project / "alpha.hpp").write_text("/// alpha ns edited\nnamespace alpha { /// f\nint f(); }\n")
+    result = build(config, base_dir=project)
+
+    assert result.parsed
+    # Only alpha's page is re-rendered; beta and the toctree replay from cache.
+    assert misses == ["alpha"]
+    assert "beta" in hits
+    assert "index" in hits
+    assert result.pages_written == ["alpha.md"]
+    assert "alpha ns edited" in (project / "api" / "alpha.md").read_text()
+
+
+@requires_libclang
+def test_incremental_page_cache_busts_dependent_on_base_rename(project: Path) -> None:
+    # A page's key must include the symbols it *references*, not just the ones it
+    # renders: renaming a base class leaves the derived class's own row (hence its
+    # content hash) untouched, so a content-hash-only key would replay a stale
+    # "Inherits from Base". The reference tokens guard against exactly that.
+    (project / "base.hpp").write_text("#pragma once\n/// base\nstruct Base {};\n")
+    (project / "derived.hpp").write_text('#include "base.hpp"\n/// derived\nstruct Derived : public Base {};\n')
+    config = Config(input=["base.hpp", "derived.hpp"], output_dir="api", cache_dir=".cache")
+    build(config, base_dir=project)
+    derived_page = project / "api" / "Derived.md"
+    assert "Base" in derived_page.read_text()
+
+    # Rename the base class (in both files so the reference stays resolved).
+    # Derived's hashed row — name, comment, signature — is unchanged; only its
+    # base-class reference moves, so the page replays stale without ref tokens.
+    (project / "base.hpp").write_text("#pragma once\n/// base\nstruct Renamed {};\n")
+    (project / "derived.hpp").write_text('#include "base.hpp"\n/// derived\nstruct Derived : public Renamed {};\n')
+    result = build(config, base_dir=project)
+
+    assert result.parsed
+    text = derived_page.read_text()
+    assert "Renamed" in text
+    assert "Base" not in text
+    assert "Derived.md" in result.pages_written
 
 
 @requires_libclang

@@ -15,9 +15,11 @@ builders, and the child/relation queries.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -26,7 +28,7 @@ from jinja2 import ChoiceLoader, Environment, FileSystemLoader, PackageLoader, S
 from clangquill.store import AccessKind, RefKind, SymbolKind
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from clangquill.comments import CommentModel
     from clangquill.store import Enumerator, Group, Parameter, Reference, SourceFile, Store, Symbol
@@ -155,6 +157,41 @@ class RenderedPage:
     stem: str
     label: str
     text: str
+
+
+# Record separator between dependency tokens, and unit separator within a token
+# (mirrors the ``\x1f`` field separator the C++ content hash uses). Both are
+# control characters that never appear in a USR, name, or content hash, so they
+# delimit the key unambiguously.
+_DEP_RECORD_SEP = "\x1e"
+_DEP_FIELD_SEP = "\x1f"
+
+
+@dataclass(frozen=True)
+class PagePlan:
+    """One page the renderer will emit, decoupled from running the Jinja pass.
+
+    Splitting *which* pages exist (and what each one reads from the IR) from the
+    actual render lets the incremental pipeline compute a per-page dependency
+    fingerprint via :meth:`Generator.page_fingerprint` and replay the cached
+    text for any page whose inputs are unchanged.
+
+    ``render`` produces the page's MyST text on demand. ``subtree_seeds`` are the
+    symbols the page renders in full (their whole child subtree is read), while
+    ``shallow_seeds`` are symbols whose own row is read but whose children render
+    elsewhere (the namespace node of a class-grouped namespace page). ``group``
+    is set instead for a documentation-group page. ``file_scope`` mirrors the
+    file id a file-grouped page renders under, so the dependency walk stays
+    inside that file exactly like the render does.
+    """
+
+    stem: str
+    label: str
+    render: Callable[[], str]
+    subtree_seeds: tuple[Symbol, ...] = ()
+    shallow_seeds: tuple[Symbol, ...] = ()
+    group: Group | None = None
+    file_scope: int | None = field(default=None)
 
 
 class Generator:
@@ -312,7 +349,7 @@ class Generator:
 
     @staticmethod
     def group_stem(group: Group) -> str:
-        """Return the page stem used for ``group`` (matches :meth:`_render_group_pages`)."""
+        """Return the page stem used for ``group`` (matches :meth:`_plan_group_pages`)."""
         return _slug(f"group_{group.id}")
 
     def comment(self, symbol: Symbol) -> CommentModel | None:
@@ -545,21 +582,36 @@ class Generator:
         to persist each :class:`RenderedPage`, which is what lets the
         incremental pipeline skip unchanged outputs.
         """
+        return [RenderedPage(plan.stem, plan.label, plan.render()) for plan in self.plan_pages(group_by=group_by)]
+
+    def plan_pages(self, *, group_by: str = "symbol") -> list[PagePlan]:
+        r"""Plan every page (stem, label, render thunk, dependencies) in order.
+
+        This is the page set :meth:`render_pages` materialises, but without
+        running the Jinja pass: each :class:`PagePlan` carries a ``render``
+        callable and the symbols it reads. The incremental pipeline plans first,
+        keys each page via :meth:`page_fingerprint`, and only calls ``render``
+        for pages whose key changed — replaying cached text for the rest.
+        """
         if group_by == "file":
-            pages = self._render_file_pages()
+            plans = self._plan_file_pages()
         elif group_by == "class":
-            pages = self._render_class_pages()
+            plans = self._plan_class_pages()
         else:
-            pages = self._render_symbol_pages()
-        return pages + self._render_group_pages()
+            plans = self._plan_symbol_pages()
+        return plans + self._plan_group_pages()
 
     def render_index(
         self,
-        pages: Sequence[RenderedPage],
+        pages: Sequence[RenderedPage | PagePlan],
         *,
         toctree_maxdepth: int = 2,
     ) -> str:
-        """Render the toctree index page that links ``pages`` in order."""
+        """Render the toctree index page that links ``pages`` in order.
+
+        Only each entry's ``stem`` and ``label`` are read, so a list of rendered
+        pages or of unrendered :class:`PagePlan` objects works interchangeably.
+        """
         index = self.env.get_template("index.md.jinja")
         return index.render(pages=[(p.stem, p.label) for p in pages], maxdepth=toctree_maxdepth)
 
@@ -591,39 +643,49 @@ class Generator:
         )
         return [page.stem for page in pages]
 
-    def _render_symbol_pages(self) -> list[RenderedPage]:
-        """Render one page per visible root symbol."""
-        pages: list[RenderedPage] = []
+    def _plan_symbol_pages(self) -> list[PagePlan]:
+        """Plan one page per visible root symbol."""
+        plans: list[PagePlan] = []
         seen: set[str] = set()
         for root in self.roots():
             stem = self._unique_stem(_slug(root.qualified_name or root.spelling), seen)
-            pages.append(RenderedPage(stem, root.qualified_name or root.spelling, self.render_symbol(root, level=1)))
-        return pages
+            label = root.qualified_name or root.spelling
+            plans.append(PagePlan(stem, label, partial(self.render_symbol, root), subtree_seeds=(root,)))
+        return plans
 
-    def _render_file_pages(self) -> list[RenderedPage]:
-        """Render one page per parsed source file that declares any symbol.
+    def _plan_file_pages(self) -> list[PagePlan]:
+        """Plan one page per parsed source file that declares any symbol.
 
         A file qualifies on its :meth:`file_roots` (the symbols physically
         declared in it), so files whose content lives entirely inside a
         namespace opened elsewhere still get a page — they would otherwise
         vanish, since only global roots used to count.
         """
-        pages: list[RenderedPage] = []
+        plans: list[PagePlan] = []
         seen: set[str] = set()
         for source_file in self.store.files():
-            if not self.file_roots(source_file.id):
+            roots = self.file_roots(source_file.id)
+            if not roots:
                 continue
             # The IR stores resolved (absolute) paths; page on the basename so
             # filenames stay short and do not leak the build machine layout.
             name = Path(source_file.path).name
             stem = self._unique_stem(_slug(name), seen)
-            pages.append(RenderedPage(stem, name, self.render_file(source_file, level=1)))
-        return pages
+            plans.append(
+                PagePlan(
+                    stem,
+                    name,
+                    partial(self.render_file, source_file),
+                    subtree_seeds=tuple(roots),
+                    file_scope=source_file.id,
+                ),
+            )
+        return plans
 
-    def _render_class_pages(self) -> list[RenderedPage]:
-        """Render one page per documented class, splitting big namespace pages.
+    def _plan_class_pages(self) -> list[PagePlan]:
+        """Plan one page per documented class, splitting big namespace pages.
 
-        Where :meth:`_render_symbol_pages` emits a single page per root symbol —
+        Where :meth:`_plan_symbol_pages` emits a single page per root symbol —
         collapsing an entire ``namespace Eigen`` into one colossal page — this
         descends *through* namespaces, emitting a page per documented record
         (class/struct/union/class template) and a page per namespace carrying
@@ -631,20 +693,20 @@ class Generator:
         variables, enums). Each record renders in full, so its methods and
         nested types stay on the record's own page.
         """
-        pages: list[RenderedPage] = []
+        plans: list[PagePlan] = []
         seen: set[str] = set()
         for root in self.roots():
-            self._emit_class_pages(root, pages, seen)
-        return pages
+            self._emit_class_plans(root, plans, seen)
+        return plans
 
-    def _emit_class_pages(self, symbol: Symbol, pages: list[RenderedPage], seen: set[str]) -> None:
-        """Append the class-granular page(s) for ``symbol`` and its subtree."""
+    def _emit_class_plans(self, symbol: Symbol, plans: list[PagePlan], seen: set[str]) -> None:
+        """Append the class-granular page plan(s) for ``symbol`` and its subtree."""
         name = symbol.qualified_name or symbol.spelling
         if symbol.kind != SymbolKind.NAMESPACE:
             # A record (or a non-container root, e.g. a global free function)
             # renders as one self-contained page.
             stem = self._unique_stem(_slug(name), seen)
-            pages.append(RenderedPage(stem, name, self.render_symbol(symbol, level=1)))
+            plans.append(PagePlan(stem, name, partial(self.render_symbol, symbol), subtree_seeds=(symbol,)))
             return
         # A namespace is transparent: each container child becomes its own page,
         # while its leaf members collect onto a page for the namespace itself.
@@ -655,13 +717,23 @@ class Generator:
         if leaves or symbol.is_documented:
             label = symbol.qualified_name or "(global namespace)"
             stem = self._unique_stem(_slug(name), seen)
-            pages.append(RenderedPage(stem, label, self.render_namespace_page(symbol, leaves, level=1)))
+            # The namespace node itself is read shallowly (heading + comment); its
+            # leaves render in full here, while its container children page apart.
+            plans.append(
+                PagePlan(
+                    stem,
+                    label,
+                    partial(self.render_namespace_page, symbol, leaves),
+                    subtree_seeds=tuple(leaves),
+                    shallow_seeds=(symbol,),
+                ),
+            )
         for child in children:
             if child.kind in _CONTAINER_KINDS:
-                self._emit_class_pages(child, pages, seen)
+                self._emit_class_plans(child, plans, seen)
 
-    def _render_group_pages(self) -> list[RenderedPage]:
-        """Render one page per documentation group, top-level groups first.
+    def _plan_group_pages(self) -> list[PagePlan]:
+        """Plan one page per documentation group, top-level groups first.
 
         Returns an empty list when the IR defines no groups, leaving output for
         group-free projects byte-identical to before.
@@ -669,7 +741,7 @@ class Generator:
         groups = self.store.groups()
         if not groups:
             return []
-        pages: list[RenderedPage] = []
+        plans: list[PagePlan] = []
         seen: set[str] = set()
         # Top-level groups first, then nested ones, for a stable toctree order.
         ordered = self.store.root_groups()
@@ -677,8 +749,96 @@ class Generator:
         ordered += [g for g in groups if g.id not in ordered_ids]
         for group in ordered:
             stem = self._unique_stem(_slug(f"group_{group.id}"), seen)
-            pages.append(RenderedPage(stem, group.title or group.id, self.render_group(group, level=1)))
-        return pages
+            plans.append(PagePlan(stem, group.title or group.id, partial(self.render_group, group), group=group))
+        return plans
+
+    # -- per-page dependency fingerprint --------------------------------------
+
+    def page_fingerprint(self, plan: PagePlan) -> str:
+        """Hash everything ``plan`` reads from the IR into a render-cache key.
+
+        The digest covers each symbol the page renders (its ``content_hash``,
+        which folds in the symbol row, its parameters and its raw comment), the
+        cross-references it resolves (so a renamed base class or referenced type
+        busts the pages that point at it), and the enumerators/group members it
+        lists. It is deliberately render-config-agnostic: the pipeline combines
+        it with the render fingerprint (templates, grouping, …) for the full key,
+        so this method need only track the IR data the bundled templates read.
+        """
+        tokens: list[str] = []
+        if plan.group is not None:
+            self._collect_group_tokens(plan.group, tokens)
+        else:
+            visited: set[str] = set()
+            previous = self._file_scope
+            self._file_scope = plan.file_scope
+            try:
+                for symbol in plan.shallow_seeds:
+                    self._collect_symbol_tokens(symbol, tokens, visited, recurse=False)
+                for symbol in plan.subtree_seeds:
+                    self._collect_symbol_tokens(symbol, tokens, visited, recurse=True)
+            finally:
+                self._file_scope = previous
+        return hashlib.sha256(_DEP_RECORD_SEP.join(tokens).encode("utf-8")).hexdigest()
+
+    def _collect_symbol_tokens(
+        self,
+        symbol: Symbol,
+        tokens: list[str],
+        visited: set[str],
+        *,
+        recurse: bool,
+    ) -> None:
+        """Append the dependency tokens for ``symbol`` (and, if ``recurse``, its subtree).
+
+        Mirrors what ``render_symbol`` reads: the symbol's own content hash, its
+        outgoing references (and the content hash of every resolved target, whose
+        qualified name a cross-reference prints), and — for an enum — its
+        enumerators. Children are walked only for the container kinds whose
+        templates recurse (namespaces and records), matching the render exactly.
+        """
+        if symbol.usr in visited:
+            return
+        visited.add(symbol.usr)
+        tokens.append(f"S{_DEP_FIELD_SEP}{symbol.usr}{_DEP_FIELD_SEP}{symbol.content_hash}")
+        for ref in self.store.references(symbol.usr):
+            tokens.append(
+                _DEP_FIELD_SEP.join(
+                    (
+                        "R",
+                        symbol.usr,
+                        str(int(ref.ref_kind)),
+                        str(ref.ordinal),
+                        ref.to_usr,
+                        ref.to_spelling,
+                        str(int(ref.access)),
+                    ),
+                ),
+            )
+            if ref.to_usr:
+                target = self.store.symbol(ref.to_usr)
+                if target is not None:
+                    tokens.append(f"T{_DEP_FIELD_SEP}{ref.to_usr}{_DEP_FIELD_SEP}{target.content_hash}")
+        if symbol.kind == SymbolKind.ENUM:
+            for en in self.enumerators(symbol):
+                tokens.append(
+                    _DEP_FIELD_SEP.join(("N", en.usr, en.name, str(en.value), str(int(en.value_is_signed)))),
+                )
+                enumerator = self.store.symbol(en.usr)
+                if enumerator is not None:
+                    tokens.append(f"E{_DEP_FIELD_SEP}{en.usr}{_DEP_FIELD_SEP}{enumerator.content_hash}")
+        if recurse and (symbol.kind == SymbolKind.NAMESPACE or symbol.kind in _RECORD_KINDS):
+            for child in self.children(symbol):
+                self._collect_symbol_tokens(child, tokens, visited, recurse=True)
+
+    def _collect_group_tokens(self, group: Group, tokens: list[str]) -> None:
+        """Append the dependency tokens a group page reads (heading, members, subgroups)."""
+        tokens.append(_DEP_FIELD_SEP.join(("G", group.id, group.title, group.brief, group.detail)))
+        tokens.extend(f"GS{_DEP_FIELD_SEP}{sub.id}" for sub in self.subgroups(group))
+        tokens.extend(
+            f"GM{_DEP_FIELD_SEP}{member.usr}{_DEP_FIELD_SEP}{member.content_hash}"
+            for member in self.group_symbols(group)
+        )
 
     @staticmethod
     def _unique_stem(stem: str, seen: set[str]) -> str:
@@ -699,4 +859,4 @@ def generate(store: Store, out_dir: str | Path, **kwargs: object) -> list[str]:
     return Generator(store, **kwargs).generate(out_dir)  # type: ignore[arg-type]
 
 
-__all__ = ["Generator", "RenderedPage", "generate", "render_symbol"]
+__all__ = ["Generator", "PagePlan", "RenderedPage", "generate", "render_symbol"]

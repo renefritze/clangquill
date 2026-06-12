@@ -200,6 +200,27 @@ def test_render_round_trip_and_currency(tmp_path: Path) -> None:
         assert cache.render_summary() == summary
 
 
+def test_page_cache_round_trip_key_sensitivity_and_pruning(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    with BuildCache.open(cache_dir) as cache:
+        # Nothing memoised yet -> a miss.
+        assert cache.cached_page("a", "k1") is None
+        cache.record_pages({"a": ("k1", "TEXT A"), "b": ("k2", "TEXT B")})
+
+    with BuildCache.open(cache_dir) as cache:
+        # State persists across open()s and the text replays on a key match.
+        assert cache.cached_page("a", "k1") == "TEXT A"
+        assert cache.cached_page("b", "k2") == "TEXT B"
+        # A stale key (the page's dependencies moved) is a miss, not the old text.
+        assert cache.cached_page("a", "different-key") is None
+
+        # Rewriting the table updates 'a' and prunes 'b' (its page vanished).
+        cache.record_pages({"a": ("k3", "TEXT A2")})
+        assert cache.cached_page("a", "k3") == "TEXT A2"
+        assert cache.cached_page("a", "k1") is None
+        assert cache.cached_page("b", "k2") is None
+
+
 def test_render_summary_survives_version_reset_as_absent(tmp_path: Path) -> None:
     cache_dir = tmp_path / "cache"
     with BuildCache.open(cache_dir) as cache:
