@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -278,7 +279,9 @@ struct TempTree {
   }
   std::string write(const std::string& name, const std::string& contents) {
     auto path = dir / name;
-    std::ofstream(path) << contents;
+    std::ofstream out(path);
+    if (!out) throw std::runtime_error("failed to write fixture " + name);
+    out << contents;
     return path.string();
   }
 };
@@ -287,11 +290,12 @@ struct TempTree {
 
 TEST_CASE("shared PCH preserves extraction and dependency tracking",
           "[parser]") {
-  // Six inputs sharing <string>/<vector> at tu_batch=2 span three batches, so
-  // parse_files precompiles the shared closure for batches after the first.
+  // Eight inputs sharing <string>/<vector> at tu_batch=2 span four batches —
+  // comfortably past the PCH threshold, so parse_files precompiles the shared
+  // closure for every batch after the first.
   TempTree tree("pch");
   std::vector<std::string> inputs;
-  for (int i = 0; i < 6; ++i) {
+  for (int i = 0; i < 8; ++i) {
     std::string n = std::to_string(i);
     inputs.push_back(tree.write(
         "in" + n + ".hpp",
@@ -311,8 +315,8 @@ TEST_CASE("shared PCH preserves extraction and dependency tracking",
   std::vector<bool> pch_ok;
   auto b = parser::parse_files(inputs, batched, &pch_files, &pch_ok);
 
-  CHECK(iso_ok == std::vector<bool>(6, true));
-  CHECK(pch_ok == std::vector<bool>(6, true));
+  CHECK(iso_ok == std::vector<bool>(inputs.size(), true));
+  CHECK(pch_ok == std::vector<bool>(inputs.size(), true));
   CHECK(symbol_usrs(a) == symbol_usrs(b));
 
   // Members of PCH-backed batches keep their full dependency closure: the
@@ -321,18 +325,17 @@ TEST_CASE("shared PCH preserves extraction and dependency tracking",
   for (std::size_t i = 0; i < inputs.size(); ++i) {
     REQUIRE_FALSE(pch_files[i].empty());
     CHECK(pch_files[i].front() == inputs[i]);
+    auto is_string_header = [](const std::string& dep) {
+      return dep == "string" || dep.ends_with("/string");
+    };
     bool has_string = false;
     for (const auto& dep : iso_files[i]) {
-      if (dep.size() >= 6 && dep.substr(dep.size() - 6) == "string") {
-        has_string = true;
-      }
+      if (is_string_header(dep)) has_string = true;
     }
     REQUIRE(has_string);  // the fixture really pulls <string> in
     bool tracked = false;
     for (const auto& dep : pch_files[i]) {
-      if (dep.size() >= 6 && dep.substr(dep.size() - 6) == "string") {
-        tracked = true;
-      }
+      if (is_string_header(dep)) tracked = true;
     }
     CHECK(tracked);
   }
