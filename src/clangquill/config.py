@@ -17,13 +17,66 @@ from dataclasses import MISSING, dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Callable, Iterable, Mapping
 
 # Sphinx config values are namespaced with this prefix.
 CONFIG_PREFIX = "clangquill_"
 
 # Permitted values for ``group_by`` (how generated pages are partitioned).
 GROUP_BY_CHOICES = ("symbol", "file", "class")
+
+
+# ``bool`` is an ``int`` subclass, but an int config field is never a flag.
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_str(value: object) -> bool:
+    return isinstance(value, str)
+
+
+def _is_optional_str(value: object) -> bool:
+    return value is None or isinstance(value, str)
+
+
+def _is_str_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _is_bool(value: object) -> bool:
+    return isinstance(value, bool)
+
+
+def _is_str_dict(value: object) -> bool:
+    return isinstance(value, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in value.items())
+
+
+# Per-field type shape ``(field, predicate, expected-description)``, checked up
+# front in :meth:`Config.validate` so wrong-typed Sphinx/CLI/Python input fails
+# with an actionable :class:`ConfigError` naming the offending ``clangquill_*``
+# value instead of a bare ``TypeError`` raised mid-validation (e.g. ``"4" < 0``
+# for a string ``tu_batch``).
+_TYPE_CHECKS: tuple[tuple[str, Callable[[object], bool], str], ...] = (
+    ("jobs", _is_int, "an integer"),
+    ("tu_batch", _is_int, "an integer"),
+    ("toctree_maxdepth", _is_int, "an integer"),
+    ("std", _is_str, "a string"),
+    ("output_dir", _is_str, "a string"),
+    ("root_document", _is_str, "a string"),
+    ("group_by", _is_str, "a string"),
+    ("compile_commands", _is_optional_str, "a string or None"),
+    ("clang_resource_dir", _is_optional_str, "a string or None"),
+    ("cache_dir", _is_optional_str, "a string or None"),
+    ("comment_parser", _is_optional_str, "a string or None"),
+    ("path_base", _is_optional_str, "a string or None"),
+    ("input", _is_str_list, "a list of strings"),
+    ("compile_args", _is_str_list, "a list of strings"),
+    ("include_dirs", _is_str_list, "a list of strings"),
+    ("defines", _is_str_list, "a list of strings"),
+    ("template_dirs", _is_str_list, "a list of strings"),
+    ("include_undocumented", _is_bool, "a boolean"),
+    ("templates", _is_str_dict, "a mapping of kind name to template name"),
+)
 
 
 class ConfigError(ValueError):
@@ -105,9 +158,7 @@ class Config:
         if not self.input:
             msg = f"{CONFIG_PREFIX}input must list at least one C++ file to parse"
             raise ConfigError(msg)
-        if not isinstance(self.input, list) or not all(isinstance(p, str) for p in self.input):
-            msg = f"{CONFIG_PREFIX}input must be a list of path strings"
-            raise ConfigError(msg)
+        self._validate_types()
         if not self.std:
             msg = f"{CONFIG_PREFIX}std must be a non-empty C++ standard, e.g. 'c++20'"
             raise ConfigError(msg)
@@ -127,10 +178,20 @@ class Config:
         if self.tu_batch < 0:
             msg = f"{CONFIG_PREFIX}tu_batch must be >= 0 (0 = auto, 1 = one TU per input), got {self.tu_batch}"
             raise ConfigError(msg)
-        if not isinstance(self.templates, dict):
-            msg = f"{CONFIG_PREFIX}templates must be a mapping of kind to template name"
-            raise ConfigError(msg)
         return self
+
+    def _validate_types(self) -> None:
+        """Reject wrong-typed field values with a field-named :class:`ConfigError`.
+
+        Runs before the value/range checks in :meth:`validate` so that, for
+        example, a string ``tu_batch`` reports a clear type error instead of
+        blowing up on the ``self.tu_batch < 0`` comparison.
+        """
+        for name, is_valid, expected in _TYPE_CHECKS:
+            value = getattr(self, name)
+            if not is_valid(value):
+                msg = f"{CONFIG_PREFIX}{name} must be {expected}, got {value!r}"
+                raise ConfigError(msg)
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> Config:

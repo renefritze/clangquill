@@ -102,3 +102,84 @@ def test_validate_accepts_non_negative_tu_batch(tu_batch: int):
 def test_validate_returns_self():
     cfg = Config(input=["a.hpp"])
     assert cfg.validate() is cfg
+
+
+# -- wrong-typed values reject with ConfigError, not a bare TypeError ----------
+
+
+@pytest.mark.parametrize("field", ["jobs", "tu_batch", "toctree_maxdepth"])
+def test_validate_rejects_non_int_fields(field: str):
+    # A string flows in untyped via from_mapping (e.g. clangquill_tu_batch = "4").
+    cfg = Config(input=["a.hpp"], **{field: "4"})
+    with pytest.raises(ConfigError, match=f"{field} must be an integer"):
+        cfg.validate()
+
+
+@pytest.mark.parametrize("field", ["jobs", "tu_batch", "toctree_maxdepth"])
+def test_validate_rejects_bool_for_int_fields(field: str):
+    cfg = Config(input=["a.hpp"], **{field: True})
+    with pytest.raises(ConfigError, match=f"{field} must be an integer"):
+        cfg.validate()
+
+
+@pytest.mark.parametrize("field", ["std", "output_dir", "root_document", "group_by"])
+def test_validate_rejects_non_str_fields(field: str):
+    cfg = Config(input=["a.hpp"], **{field: 123})
+    with pytest.raises(ConfigError, match=f"{field} must be a string"):
+        cfg.validate()
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["compile_commands", "clang_resource_dir", "cache_dir", "comment_parser", "path_base"],
+)
+def test_validate_rejects_non_str_optional_fields(field: str):
+    cfg = Config(input=["a.hpp"], **{field: 123})
+    with pytest.raises(ConfigError, match=f"{field} must be a string or None"):
+        cfg.validate()
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["compile_commands", "clang_resource_dir", "cache_dir", "comment_parser", "path_base"],
+)
+def test_validate_accepts_none_for_optional_str_fields(field: str):
+    assert Config(input=["a.hpp"], **{field: None}).validate() is not None
+
+
+@pytest.mark.parametrize("field", ["compile_args", "include_dirs", "defines", "template_dirs"])
+def test_validate_rejects_non_list_fields(field: str):
+    cfg = Config(input=["a.hpp"], **{field: "not-a-list"})
+    with pytest.raises(ConfigError, match=f"{field} must be a list of strings"):
+        cfg.validate()
+
+
+@pytest.mark.parametrize("field", ["compile_args", "include_dirs", "defines", "template_dirs"])
+def test_validate_rejects_list_with_non_str_items(field: str):
+    cfg = Config(input=["a.hpp"], **{field: ["ok", 5]})
+    with pytest.raises(ConfigError, match=f"{field} must be a list of strings"):
+        cfg.validate()
+
+
+def test_validate_rejects_non_bool_include_undocumented():
+    cfg = Config(input=["a.hpp"], include_undocumented="yes")
+    with pytest.raises(ConfigError, match="include_undocumented must be a boolean"):
+        cfg.validate()
+
+
+def test_validate_rejects_non_dict_templates():
+    cfg = Config(input=["a.hpp"], templates=["class"])
+    with pytest.raises(ConfigError, match="templates must be a mapping"):
+        cfg.validate()
+
+
+def test_validate_rejects_templates_with_non_str_values():
+    cfg = Config(input=["a.hpp"], templates={"class": 1})
+    with pytest.raises(ConfigError, match="templates must be a mapping"):
+        cfg.validate()
+
+
+def test_validate_rejects_non_list_input():
+    cfg = Config(input="a.hpp")
+    with pytest.raises(ConfigError, match="input must be a list of strings"):
+        cfg.validate()
