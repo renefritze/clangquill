@@ -397,9 +397,8 @@ def write_sphinx_scaffold(ctx: RepoContext) -> None:
 
 
 def sphinx_argv(ctx: RepoContext, sphinx_cmd: list[str]) -> list[str]:
-    """Build the ``sphinx-build`` argv for the render stage (quiet, single-job)."""
-    # -q quiet, -j auto would parallelise; keep single-job for fair, stable timing.
-    return [*sphinx_cmd, "-b", "html", "-q", str(ctx.sphinx_src), str(ctx.sphinx_out)]
+    """Build the ``sphinx-build`` argv for the render stage (quiet, parallel)."""
+    return [*sphinx_cmd, "-b", "html", "-q", "-j", "auto", str(ctx.sphinx_src), str(ctx.sphinx_out)]
 
 
 def write_doxyfile(ctx: RepoContext, mode: str) -> Path:
@@ -421,7 +420,9 @@ def write_doxyfile(ctx: RepoContext, mode: str) -> Path:
         "WARN_IF_UNDOCUMENTED = NO",
         "GENERATE_LATEX = NO",
         "EXTRACT_ALL = YES",
-        # Keep both tools single-threaded and graphviz-free for a fair comparison.
+        # NUM_PROC_THREADS = 0 lets Doxygen use all available CPUs (mirrors
+        # clangquill's default jobs=0 / hardware_concurrency behaviour).
+        "NUM_PROC_THREADS = 0",
         "HAVE_DOT = NO",
     ]
     if mode == "xml":
