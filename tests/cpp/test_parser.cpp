@@ -1,6 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <set>
 #include <string>
 #include <vector>
@@ -252,6 +255,129 @@ TEST_CASE("umbrella batching attributes dependencies per member exactly",
     for (const auto& dep : tu_files[i]) {
       CHECK(dep.find(i == 0 ? "enums.hpp" : "shapes.hpp") == std::string::npos);
     }
+  }
+}
+
+namespace {
+
+// A throwaway directory of generated headers, so the PCH tests control how
+// many inputs exist (parse_files only builds a PCH past kMinBatchesForPch
+// batches) and which headers they share.
+struct TempTree {
+  std::filesystem::path dir;
+  explicit TempTree(const std::string& name)
+      : dir(std::filesystem::temp_directory_path() /
+            ("clangquill-test-" + name + "-" +
+             std::to_string(
+                 std::chrono::steady_clock::now().time_since_epoch().count()))) {
+    std::filesystem::create_directories(dir);
+  }
+  ~TempTree() {
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+  }
+  std::string write(const std::string& name, const std::string& contents) {
+    auto path = dir / name;
+    std::ofstream(path) << contents;
+    return path.string();
+  }
+};
+
+}  // namespace
+
+TEST_CASE("shared PCH preserves extraction and dependency tracking",
+          "[parser]") {
+  // Six inputs sharing <string>/<vector> at tu_batch=2 span three batches, so
+  // parse_files precompiles the shared closure for batches after the first.
+  TempTree tree("pch");
+  std::vector<std::string> inputs;
+  for (int i = 0; i < 6; ++i) {
+    std::string n = std::to_string(i);
+    inputs.push_back(tree.write(
+        "in" + n + ".hpp",
+        "#pragma once\n#include <string>\n#include <vector>\n"
+        "namespace pch_test { std::string f" + n + "(std::vector<int>); }\n"));
+  }
+
+  parser::ParseOptions isolated;
+  isolated.tu_batch = 1;
+  parser::ParseOptions batched;
+  batched.tu_batch = 2;
+
+  std::vector<std::vector<std::string>> iso_files;
+  std::vector<bool> iso_ok;
+  auto a = parser::parse_files(inputs, isolated, &iso_files, &iso_ok);
+  std::vector<std::vector<std::string>> pch_files;
+  std::vector<bool> pch_ok;
+  auto b = parser::parse_files(inputs, batched, &pch_files, &pch_ok);
+
+  CHECK(iso_ok == std::vector<bool>(6, true));
+  CHECK(pch_ok == std::vector<bool>(6, true));
+  CHECK(symbol_usrs(a) == symbol_usrs(b));
+
+  // Members of PCH-backed batches keep their full dependency closure: the
+  // <string> header lives inside the PCH, yet editing it must still
+  // invalidate every member, so it has to stay in each member's file set.
+  for (std::size_t i = 0; i < inputs.size(); ++i) {
+    REQUIRE_FALSE(pch_files[i].empty());
+    CHECK(pch_files[i].front() == inputs[i]);
+    bool has_string = false;
+    for (const auto& dep : iso_files[i]) {
+      if (dep.size() >= 6 && dep.substr(dep.size() - 6) == "string") {
+        has_string = true;
+      }
+    }
+    REQUIRE(has_string);  // the fixture really pulls <string> in
+    bool tracked = false;
+    for (const auto& dep : pch_files[i]) {
+      if (dep.size() >= 6 && dep.substr(dep.size() - 6) == "string") {
+        tracked = true;
+      }
+    }
+    CHECK(tracked);
+  }
+
+  // Every dependency a batched member reports has a hashed file row.
+  std::set<std::string> rows;
+  for (const auto& f : b.files) rows.insert(f.path);
+  for (const auto& deps : pch_files) {
+    for (const auto& dep : deps) CHECK(rows.count(dep) == 1);
+  }
+}
+
+TEST_CASE("an input reachable from a common header never enters the PCH",
+          "[parser]") {
+  // `shared.hpp` is included by every member, so it is a PCH candidate — but
+  // its own include closure contains `inner.hpp`, which is itself an input.
+  // Baking inner.hpp into the PCH would guard-skip its #include in the batch
+  // that owns it and silently drop its symbols; build_pch must drop the
+  // candidate instead.
+  TempTree tree("pch-excl");
+  std::string inner = tree.write(
+      "inner.hpp", "#pragma once\nnamespace pch_excl { int inner_fn(); }\n");
+  std::string shared = tree.write(
+      "shared.hpp",
+      "#pragma once\n#include \"inner.hpp\"\n#include <string>\n"
+      "namespace pch_excl { std::string shared_fn(); }\n");
+  std::vector<std::string> inputs;
+  for (int i = 0; i < 6; ++i) {
+    std::string n = std::to_string(i);
+    inputs.push_back(tree.write(
+        "in" + n + ".hpp",
+        "#pragma once\n#include \"shared.hpp\"\n"
+        "namespace pch_excl { int f" + n + "(); }\n"));
+  }
+  inputs.push_back(inner);  // parsed by the last batch, alone
+
+  parser::ParseOptions batched;
+  batched.tu_batch = 2;  // 4 batches: PCH active, inner.hpp in the tail batch
+  std::vector<bool> ok;
+  auto m = parser::parse_files(inputs, batched, nullptr, &ok);
+
+  CHECK(ok == std::vector<bool>(7, true));
+  CHECK(find(m, "pch_excl::inner_fn") != nullptr);
+  for (int i = 0; i < 6; ++i) {
+    CHECK(find(m, "pch_excl::f" + std::to_string(i)) != nullptr);
   }
 }
 

@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <exception>
+#include <functional>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -28,6 +30,19 @@ CXIndex as_index(void* p) { return static_cast<CXIndex>(p); }
 // 0 (auto). Fixed — independent of the job count — so the batch composition,
 // and with it the extracted IR, is identical no matter how many threads run.
 constexpr std::size_t kDefaultTuBatch = 16;
+
+// Batches a run must span before the shared common-header PCH pays for itself:
+// building it costs roughly one extra parse of the common closure (plus
+// serialization), so with fewer batches the fixed cost eats the saving.
+constexpr std::size_t kMinBatchesForPch = 3;
+
+// A header qualifies for the PCH when at least this share of the seed batch's
+// members pull it in. A quarter measured fastest on abseil (see #90): low
+// enough to catch most of the shared closure, high enough to keep rarely
+// shared (and often less self-contained) headers out of the PCH, whose build
+// time they dominate.
+constexpr std::size_t kPchFrequencyNumerator = 1;
+constexpr std::size_t kPchFrequencyDenominator = 4;
 
 // RAII guard so the translation unit is disposed on every exit path,
 // including exceptions thrown while collecting diagnostics or visiting.
@@ -163,7 +178,11 @@ std::vector<std::string> include_closure(
 }  // namespace
 
 Parser::Parser(ParseOptions options) : options_(std::move(options)) {
-  index_ = clang_createIndex(/*excludeDeclarationsFromPCH=*/0,
+  // Declarations living in a loaded PCH are never extraction targets (only
+  // non-input headers are precompiled, see build_pch), so excluding them keeps
+  // top-level visitation of a PCH-backed umbrella member-only instead of
+  // deserializing the whole common closure. Without a PCH the flag is inert.
+  index_ = clang_createIndex(/*excludeDeclarationsFromPCH=*/1,
                              /*displayDiagnostics=*/0);
 }
 
@@ -252,6 +271,104 @@ bool Parser::parse_file(const std::string& path, model::ParsedModule& out,
   return true;
 }
 
+void Parser::set_pch(std::string pch_path, std::vector<std::string> pch_files) {
+  pch_path_ = std::move(pch_path);
+  pch_files_ = std::move(pch_files);
+}
+
+bool Parser::build_pch(std::vector<std::string> headers,
+                       const std::unordered_set<std::string>& exclude,
+                       const std::string& out_path,
+                       std::vector<std::string>* pch_files) {
+  // The synthetic header exists only as an unsaved file; the path is just the
+  // identity diagnostics would use, kept next to the PCH it produces.
+  const std::string synthetic = out_path + ".hpp";
+
+  std::vector<std::string> args = build_args(synthetic);
+  // build_args targets translation units; a PCH must be compiled as a header.
+  for (auto& a : args) {
+    if (a == "-xc++") a = "-xc++-header";
+  }
+  std::vector<const char*> argv;
+  argv.reserve(args.size());
+  for (const auto& a : args) argv.push_back(a.c_str());
+
+  unsigned flags = CXTranslationUnit_ForSerialization |
+                   CXTranslationUnit_SkipFunctionBodies;
+  if (options_.keep_going) flags |= CXTranslationUnit_KeepGoing;
+
+  while (!headers.empty()) {
+    std::string contents;
+    for (const auto& h : headers) contents += "#include \"" + h + "\"\n";
+    CXUnsavedFile unsaved{synthetic.c_str(), contents.c_str(),
+                          static_cast<unsigned long>(contents.size())};
+
+    CXTranslationUnit tu = nullptr;
+    CXErrorCode rc = clang_parseTranslationUnit2(
+        as_index(index_), synthetic.c_str(), argv.data(),
+        static_cast<int>(argv.size()), &unsaved, 1, flags, &tu);
+    if (rc != CXError_Success || tu == nullptr) {
+      if (tu) clang_disposeTranslationUnit(tu);
+      return false;
+    }
+    TuGuard guard{tu};
+
+    // Walk every file the PCH would bake in. A file from `exclude` is traced
+    // back through its inclusion stack to the candidate that pulled it in —
+    // the stack bottoms out at an `#include` line in the synthetic header, and
+    // that line number *is* the candidate's index — and the candidate is
+    // dropped. One offender surfaces per pass (clang_getInclusions reports
+    // each file's first entry only), so retry until the closure is clean.
+    struct Walk {
+      const std::unordered_set<std::string>* exclude;
+      const std::string* synthetic;
+      std::vector<std::string> files;
+      std::vector<std::size_t> drop;  // candidate indices to remove
+    } walk{&exclude, &synthetic, {}, {}};
+    clang_getInclusions(
+        tu,
+        [](CXFile f, CXSourceLocation* stack, unsigned len, CXClientData data) {
+          auto& w = *static_cast<Walk*>(data);
+          std::string name = to_string(clang_getFileName(f));
+          if (name.empty() || name == *w.synthetic) return;
+          w.files.push_back(std::move(name));
+          if (len == 0 || w.exclude->find(w.files.back()) == w.exclude->end()) {
+            return;
+          }
+          unsigned line = 0;
+          clang_getFileLocation(stack[len - 1], nullptr, &line, nullptr,
+                                nullptr);
+          if (line > 0) w.drop.push_back(line - 1);
+        },
+        &walk);
+
+    if (!walk.drop.empty()) {
+      // Erase back-to-front so earlier indices stay valid.
+      std::sort(walk.drop.begin(), walk.drop.end(), std::greater<>{});
+      bool erased = false;
+      for (std::size_t idx : walk.drop) {
+        if (idx < headers.size()) {
+          headers.erase(headers.begin() + static_cast<std::ptrdiff_t>(idx));
+          erased = true;
+        }
+      }
+      if (!erased) return false;  // can't attribute the offender: give up
+      continue;
+    }
+
+    if (clang_saveTranslationUnit(tu, out_path.c_str(),
+                                  clang_defaultSaveOptions(tu)) !=
+        CXSaveError_None) {
+      // Typically a hard error in a common header (libclang refuses to
+      // serialize a unit with errors): proceed without a PCH.
+      return false;
+    }
+    if (pch_files != nullptr) *pch_files = std::move(walk.files);
+    return true;
+  }
+  return false;
+}
+
 bool Parser::parse_batch(const std::vector<std::string>& paths,
                          model::ParsedModule& out,
                          std::vector<std::vector<std::string>>* member_files,
@@ -278,6 +395,11 @@ bool Parser::parse_batch(const std::vector<std::string>& paths,
   for (const auto& p : abs) contents += "#include \"" + p + "\"\n";
 
   std::vector<std::string> args = build_args(abs.front());
+  bool used_pch = !pch_path_.empty();
+  if (used_pch) {
+    args.push_back("-include-pch");
+    args.push_back(pch_path_);
+  }
   std::vector<const char*> argv;
   argv.reserve(args.size());
   for (const auto& a : args) argv.push_back(a.c_str());
@@ -292,6 +414,17 @@ bool Parser::parse_batch(const std::vector<std::string>& paths,
   CXErrorCode rc = clang_parseTranslationUnit2(
       as_index(index_), umbrella.c_str(), argv.data(),
       static_cast<int>(argv.size()), &unsaved, 1, flags, &tu);
+  if ((rc != CXError_Success || tu == nullptr) && used_pch) {
+    // A PCH that fails to load (clobbered file, toolchain hiccup) must cost
+    // speed, not symbols: retry the umbrella once without it.
+    if (tu) clang_disposeTranslationUnit(tu);
+    tu = nullptr;
+    argv.resize(argv.size() - 2);  // strip "-include-pch <path>"
+    used_pch = false;
+    rc = clang_parseTranslationUnit2(as_index(index_), umbrella.c_str(),
+                                     argv.data(), static_cast<int>(argv.size()),
+                                     &unsaved, 1, flags, &tu);
+  }
   if (rc != CXError_Success || tu == nullptr) {
     if (tu) clang_disposeTranslationUnit(tu);
     // The umbrella itself could not be created (should be rare): fall back to
@@ -337,6 +470,18 @@ bool Parser::parse_batch(const std::vector<std::string>& paths,
       if (member_files != nullptr && entered) {
         (*member_files)[i] =
             include_closure(edges, to_string(clang_getFileName(file)));
+        if (used_pch) {
+          // The preprocessing record stops at the PCH boundary: edges *between*
+          // files the PCH owns were recorded when it was built, not here. The
+          // member's closure is completed with the whole PCH closure —
+          // conservative, so at worst an unrelated header edit re-parses this
+          // member unnecessarily.
+          std::unordered_set<std::string> have((*member_files)[i].begin(),
+                                               (*member_files)[i].end());
+          for (const auto& f : pch_files_) {
+            if (have.insert(f).second) (*member_files)[i].push_back(f);
+          }
+        }
       }
     }
   }
@@ -374,6 +519,61 @@ void merge_into(model::ParsedModule& out, model::ParsedModule& part,
   append(out.diagnostics, part.diagnostics);
 }
 
+// A unique temp-file path for this run's PCH, empty when no usable temp dir
+// exists. Random suffix: concurrent clangquill processes must not clobber each
+// other's PCH.
+std::string make_pch_path() {
+  std::error_code ec;
+  std::filesystem::path dir = std::filesystem::temp_directory_path(ec);
+  if (ec) return {};
+  static std::atomic<unsigned> counter{0};
+  auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  return (dir / ("clangquill-" + std::to_string(stamp) + "-" +
+                 std::to_string(counter.fetch_add(1)) + ".pch"))
+      .string();
+}
+
+// Removes the temporary PCH on every exit path of parse_files.
+struct PchCleanup {
+  std::string path;
+  ~PchCleanup() {
+    if (!path.empty()) {
+      std::error_code ec;
+      std::filesystem::remove(path, ec);
+    }
+  }
+};
+
+// Headers shared by enough of the seed batch's members to precompile, in
+// first-inclusion order (`recorded` is the seed batch's file rows, which the
+// inclusion visitor appended in entry order — so a header always precedes
+// anything it pulled in). Files in `exclude` (the parse inputs) never qualify:
+// precompiling an input would hide its declarations from extraction.
+std::vector<std::string> common_headers(
+    const std::vector<model::SourceFile>& recorded,
+    const std::vector<std::vector<std::string>>& member_files,
+    const std::vector<bool>& member_ok,
+    const std::unordered_set<std::string>& exclude) {
+  std::unordered_map<std::string, std::size_t> freq;
+  std::size_t members = 0;
+  for (std::size_t i = 0; i < member_files.size(); ++i) {
+    if (i < member_ok.size() && !member_ok[i]) continue;
+    ++members;
+    for (const auto& f : member_files[i]) ++freq[f];
+  }
+  std::vector<std::string> result;
+  if (members == 0) return result;
+  for (const auto& row : recorded) {
+    if (exclude.find(row.path) != exclude.end()) continue;
+    auto it = freq.find(row.path);
+    if (it != freq.end() && it->second * kPchFrequencyDenominator >=
+                                members * kPchFrequencyNumerator) {
+      result.push_back(row.path);
+    }
+  }
+  return result;
+}
+
 }  // namespace
 
 model::ParsedModule parse_files(const std::vector<std::string>& inputs,
@@ -409,47 +609,100 @@ model::ParsedModule parse_files(const std::vector<std::string>& inputs,
   effective_jobs =
       std::min<unsigned>(effective_jobs, static_cast<unsigned>(num_batches));
 
+  // Parses batch `b` with `parser`, publishing into this function's shared
+  // slots. Each invocation writes only its own batch's slots — distinct
+  // objects in the outer vectors — so concurrent calls need no
+  // synchronisation. The success flags stay per-batch (ok_parts) until the
+  // join, because bit-packed vector<bool> elements are not distinct objects.
+  // `capture`, when non-null, additionally receives every member's dependency
+  // closure (the seed pass mines those for PCH candidates even when the
+  // caller didn't ask for tu_files).
+  auto run_batch = [&](Parser& parser, std::size_t b,
+                       std::vector<std::vector<std::string>>* capture) {
+    const std::size_t begin = b * batch_size;
+    const std::size_t end = std::min(begin + batch_size, inputs.size());
+    std::vector<std::string> members(inputs.begin() + begin,
+                                     inputs.begin() + end);
+    // Parse into a local module so a mid-parse exception cannot leave
+    // half-built rows in the slot: only a clean parse is published, and an
+    // exception escaping a worker thread (which would otherwise call
+    // std::terminate) is contained as a diagnostic (parse errors are already
+    // reported this way) so the run carries on with the next batch.
+    try {
+      model::ParsedModule part;
+      std::vector<std::vector<std::string>> member_files(members.size());
+      std::vector<bool> member_ok(members.size(), false);
+      const bool want_files = tu_files != nullptr || capture != nullptr;
+      const bool want_ok = tu_parsed != nullptr || capture != nullptr;
+      parser.parse_batch(members, part, want_files ? &member_files : nullptr,
+                         want_ok ? &member_ok : nullptr);
+      for (std::size_t i = 0; i < members.size(); ++i) {
+        if (tu_files != nullptr) {
+          (*tu_files)[begin + i] =
+              capture != nullptr ? member_files[i] : std::move(member_files[i]);
+        }
+      }
+      if (capture != nullptr) *capture = std::move(member_files);
+      ok_parts[b] = std::move(member_ok);
+      parts[b] = std::move(part);
+    } catch (const std::exception& e) {
+      parts[b] = model::ParsedModule{};
+      parts[b].diagnostics.push_back("exception parsing batch of " +
+                                     inputs[begin] + ": " + e.what());
+    } catch (...) {
+      parts[b] = model::ParsedModule{};
+      parts[b].diagnostics.push_back("unknown exception parsing batch of " +
+                                     inputs[begin]);
+    }
+  };
+
+  // With enough batches, parse the first one up front: its members' closures
+  // reveal the headers the whole run would otherwise keep re-parsing, and
+  // those get precompiled into a temporary PCH every remaining batch loads.
+  // The seed batch itself parses without the PCH, so its slot is exact either
+  // way, and any failure below just degrades to the no-PCH behaviour.
+  PchCleanup pch_cleanup;
+  std::string pch_path;                // non-empty only when usable
+  std::vector<std::string> pch_files;  // the PCH's own include closure
+  std::size_t first_unclaimed = 0;
+  if (batch_size > 1 && num_batches >= kMinBatchesForPch) {
+    Parser seed(options);
+    std::vector<std::vector<std::string>> seed_closures;
+    run_batch(seed, 0, &seed_closures);
+    first_unclaimed = 1;
+
+    // No input may end up inside the PCH (directly or via a common header's
+    // own includes): the PCH would guard-skip its #include in the batch that
+    // owns it and extraction would miss its declarations.
+    std::unordered_set<std::string> input_paths;
+    for (const auto& in : inputs) {
+      input_paths.insert(in);
+      input_paths.insert(absolute_path(in));
+    }
+    std::vector<std::string> common = common_headers(
+        parts[0].files, seed_closures, ok_parts[0], input_paths);
+    if (!common.empty()) {
+      std::string path = make_pch_path();
+      if (!path.empty()) {
+        pch_cleanup.path = path;  // remove even a partially written file
+        if (seed.build_pch(std::move(common), input_paths, path, &pch_files)) {
+          pch_path = path;
+        } else {
+          pch_files.clear();
+        }
+      }
+    }
+  }
+
   // Each worker owns its own Parser (hence its own CXIndex) and pulls the next
-  // unclaimed batch until the queue drains.
-  std::atomic<std::size_t> next{0};
+  // unclaimed batch until the queue drains. The PCH file is shared read-only.
+  std::atomic<std::size_t> next{first_unclaimed};
   auto worker = [&]() {
     Parser parser(options);
+    if (!pch_path.empty()) parser.set_pch(pch_path, pch_files);
     std::size_t b;
     while ((b = next.fetch_add(1)) < num_batches) {
-      const std::size_t begin = b * batch_size;
-      const std::size_t end = std::min(begin + batch_size, inputs.size());
-      std::vector<std::string> members(inputs.begin() + begin,
-                                       inputs.begin() + end);
-      // Parse into a local module so a mid-parse exception cannot leave
-      // half-built rows in the slot: only a clean parse is published, and an
-      // exception escaping a worker thread (which would otherwise call
-      // std::terminate) is contained as a diagnostic (parse errors are already
-      // reported this way) so the run carries on with the next batch.
-      try {
-        model::ParsedModule part;
-        std::vector<std::vector<std::string>> member_files(members.size());
-        std::vector<bool> member_ok(members.size(), false);
-        parser.parse_batch(members, part,
-                           tu_files != nullptr ? &member_files : nullptr,
-                           tu_parsed != nullptr ? &member_ok : nullptr);
-        // Each thread writes only its own batch's slots — distinct objects in
-        // the shared outer vectors — so this needs no synchronisation. The
-        // success flags stay per-batch (ok_parts) until the join, because
-        // bit-packed vector<bool> elements are not distinct objects.
-        for (std::size_t i = 0; i < members.size(); ++i) {
-          if (tu_files != nullptr) (*tu_files)[begin + i] = std::move(member_files[i]);
-        }
-        ok_parts[b] = std::move(member_ok);
-        parts[b] = std::move(part);
-      } catch (const std::exception& e) {
-        parts[b] = model::ParsedModule{};
-        parts[b].diagnostics.push_back("exception parsing batch of " +
-                                       inputs[begin] + ": " + e.what());
-      } catch (...) {
-        parts[b] = model::ParsedModule{};
-        parts[b].diagnostics.push_back("unknown exception parsing batch of " +
-                                       inputs[begin]);
-      }
+      run_batch(parser, b, nullptr);
     }
   };
 
@@ -483,9 +736,20 @@ model::ParsedModule parse_files(const std::vector<std::string>& inputs,
     }
   }
 
+  // Files the PCH owns are invisible to a PCH-backed unit's inclusion visitor,
+  // so their rows (path, hash, size) are recorded once here. In practice a
+  // dedup no-op: the seed batch parsed the same closure and already recorded
+  // every one of these files.
+  model::ParsedModule pch_part;
+  if (!pch_files.empty()) {
+    std::unordered_set<std::string> seen;
+    for (const auto& f : pch_files) record_file(f, pch_part, seen);
+  }
+
   model::ParsedModule merged;
   std::unordered_set<std::string> seen_files;
   for (auto& part : parts) merge_into(merged, part, seen_files);
+  merge_into(merged, pch_part, seen_files);
   return merged;
 }
 

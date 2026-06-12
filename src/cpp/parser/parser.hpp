@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "model/module.hpp"
@@ -81,11 +82,56 @@ class Parser {
                    std::vector<std::vector<std::string>>* member_files = nullptr,
                    std::vector<bool>* member_ok = nullptr);
 
+  /// @brief Precompiles @p headers into a PCH at @p out_path.
+  ///
+  /// A synthetic header `#include`-ing every entry (in order, by the given
+  /// spelling) is parsed once and serialized with `clang_saveTranslationUnit`,
+  /// so later umbrella batches can load the result instead of re-parsing the
+  /// shared closure. Any candidate whose transitive closure reaches a file in
+  /// @p exclude is dropped and the PCH is re-built without it: baking an
+  /// excluded file (in practice: a parse *input*) into the PCH would
+  /// guard-skip its `#include` in member files and hide its declarations from
+  /// extraction.
+  ///
+  /// @param headers Candidate headers, in the order they should be compiled.
+  /// @param exclude Files that must not end up inside the PCH closure.
+  /// @param out_path Where the serialized PCH is written.
+  /// @param pch_files Receives the PCH's own file closure (every header baked
+  ///        in). Pass it to @ref set_pch, and record those files wherever the
+  ///        module's file rows are assembled — translation units that load the
+  ///        PCH no longer report them.
+  /// @return `false` when nothing could be precompiled (unwritable output, a
+  ///         hard error in a common header, every candidate excluded); the
+  ///         caller simply proceeds without a PCH.
+  bool build_pch(std::vector<std::string> headers,
+                 const std::unordered_set<std::string>& exclude,
+                 const std::string& out_path,
+                 std::vector<std::string>* pch_files);
+
+  /// @brief Loads @p pch_path (via `-include-pch`) into every subsequent
+  ///        umbrella batch, so the precompiled common headers are deserialized
+  ///        instead of re-parsed.
+  ///
+  /// The headers baked into the PCH must not include any batch member (see
+  /// @ref build_pch's @p exclude). Because a PCH-backed unit's preprocessing
+  /// record cannot see edges *between* files the PCH owns, @p pch_files (the
+  /// PCH's closure) is appended to every member's dependency closure —
+  /// conservative for members that use only part of the PCH, which can only
+  /// cause extra incremental re-parses, never missed ones. If the PCH fails to
+  /// load, the batch is retried without it, so a stale or clobbered file costs
+  /// speed, not symbols.
+  ///
+  /// @param pch_path Serialized PCH produced by @ref build_pch; empty disables.
+  /// @param pch_files That PCH's file closure, as reported by @ref build_pch.
+  void set_pch(std::string pch_path, std::vector<std::string> pch_files);
+
  private:
   std::vector<std::string> build_args(const std::string& path) const;
 
   ParseOptions options_;
   void* index_ = nullptr;  // CXIndex (opaque here to keep the header clang-free)
+  std::string pch_path_;   // set_pch: -include-pch for umbrella batches
+  std::vector<std::string> pch_files_;  // that PCH's own include closure
   // Lazily-loaded compile_commands.json reader, shared across this parser's
   // translation units (mutable: caching it does not change observable state).
   mutable std::unique_ptr<class CompileDb> compile_db_;
@@ -102,6 +148,14 @@ class Parser {
 /// depends only on the input order — never on the job count — and results merge
 /// back in batch order, so the output is deterministic regardless of how many
 /// threads ran. `options.jobs <= 0` selects the hardware concurrency.
+///
+/// When the run spans enough batches, the first batch is parsed up front and
+/// the headers most of its members share are precompiled into a temporary PCH
+/// that every remaining batch loads instead of re-parsing (see
+/// Parser::build_pch / Parser::set_pch), eliminating most of the per-batch
+/// fixed cost. Inputs are never baked into the PCH, and the PCH widens the
+/// same cross-member preprocessor-context tradeoff batching already makes —
+/// `tu_batch = 1` opts out of both.
 ///
 /// @param inputs Translation units to parse, in the order they should merge.
 /// @param options Parse configuration applied to every file.
