@@ -15,7 +15,13 @@ write, and symbols that disappear have their pages deleted. A *fully* unchanged
 build (cache-hit parse and unchanged render config/templates) goes one step
 further and skips the Jinja render entirely, returning the previous run's counts
 straight from the cache rather than re-rendering only to discover nothing
-changed. The parse side is *per translation unit*: when the input set and
+changed. When *some* symbols did change, the render is still incremental: each
+page is keyed by the content hashes of the symbols it reads (plus the render
+fingerprint) and replayed from a per-page cache unless that key moved, so only
+the pages whose symbols actually changed are re-rendered. (Per-page memoisation
+is used only with the bundled templates; a custom template falls back to a full
+render of every page, since it may read IR data the key does not track.) The
+parse side is *per translation unit*: when the input set and
 compile configuration are unchanged, only the translation units whose files
 actually changed are re-parsed into the existing IR (the rest are reused), so
 touching one header out of many costs roughly one TU parse instead of the whole
@@ -224,12 +230,68 @@ def _make_generator(config: Config, base_dir: Path, store: Store) -> Generator:
     )
 
 
-def _rendered_files(generator: Generator, config: Config) -> list[tuple[str, str]]:
-    """Render every output into ``(filename, text)`` pairs, index last."""
-    pages = generator.render_pages(group_by=config.group_by)
-    index_text = generator.render_index(pages, toctree_maxdepth=config.toctree_maxdepth)
-    rendered = [(f"{page.stem}.md", page.text) for page in pages]
-    rendered.append((f"{config.root_document}.md", index_text))
+def _page_cache_eligible(config: Config) -> bool:
+    """Whether per-page render memoisation is safe for ``config``.
+
+    The page cache replays a page's text whenever the IR data the *bundled*
+    templates read is unchanged. A custom template (a ``template_dirs`` override
+    or a per-kind ``templates`` mapping) may read IR fields the dependency
+    fingerprint does not track, so those builds keep the full-render path and
+    stay correct — the render fingerprint still busts the whole cache when a
+    template changes, but within a build every page is rendered.
+    """
+    return not config.template_dirs and not config.templates
+
+
+def _rendered_files(
+    generator: Generator,
+    config: Config,
+    *,
+    cache: BuildCache | None = None,
+    render_fingerprint: str = "",
+) -> list[tuple[str, str]]:
+    """Render every output into ``(filename, text)`` pairs, index last.
+
+    When ``cache`` is supplied and the build uses only bundled templates
+    (:func:`_page_cache_eligible`), each page is keyed by its dependency
+    fingerprint combined with ``render_fingerprint`` and replayed from the page
+    cache when unchanged, so an incremental build re-runs Jinja only for the
+    pages whose symbols actually moved. Without a cache it renders everything.
+    """
+    plans = generator.plan_pages(group_by=config.group_by)
+    memoize = cache is not None and _page_cache_eligible(config)
+    rendered: list[tuple[str, str]] = []
+    records: dict[str, tuple[str, str]] = {}
+    for plan in plans:
+        key = ""
+        text: str | None = None
+        if memoize:
+            key = hash_text(render_fingerprint + generator.page_fingerprint(plan))
+            text = cache.cached_page(plan.stem, key)
+        if text is None:
+            text = plan.render()
+        rendered.append((f"{plan.stem}.md", text))
+        if memoize:
+            records[plan.stem] = (key, text)
+
+    index_stem = config.root_document
+    index_key = ""
+    index_text: str | None = None
+    if memoize:
+        # The index links the page *set*; its toctree depth/root ride in the
+        # render fingerprint, so the stem/label list is all that varies here.
+        index_key = hash_text(
+            render_fingerprint + fingerprint({"index": [[plan.stem, plan.label] for plan in plans]}),
+        )
+        index_text = cache.cached_page(index_stem, index_key)
+    if index_text is None:
+        index_text = generator.render_index(plans, toctree_maxdepth=config.toctree_maxdepth)
+    rendered.append((f"{index_stem}.md", index_text))
+
+    if memoize:
+        records[index_stem] = (index_key, index_text)
+        # Rewriting the whole table prunes pages whose symbol vanished.
+        cache.record_pages(records)
     return rendered
 
 
@@ -343,7 +405,7 @@ def _incremental_build(
             elif parsed:
                 cache.record_parse(parse_fp, snapshot, _tu_deps(counts))
             generator = _make_generator(config, base, store)
-            rendered = _rendered_files(generator, config)
+            rendered = _rendered_files(generator, config, cache=cache, render_fingerprint=render_fp)
             symbol_count = store.symbol_count()
             reference_count = store.reference_count()
             file_count = store.file_count()

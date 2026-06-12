@@ -35,8 +35,10 @@ if TYPE_CHECKING:
 #
 # v2 added the ``(mtime_ns, size_bytes)`` fast-path columns on ``inputs``; v3
 # adds the ``tu_inputs`` table so the cache can attribute each tracked file to
-# the input(s) that #include it, enabling per-TU incremental re-parses.
-CACHE_VERSION = 3
+# the input(s) that #include it, enabling per-TU incremental re-parses; v4 adds
+# the ``page_cache`` table that memoises rendered page text by a dependency key,
+# so an incremental build re-renders only the pages whose symbols changed.
+CACHE_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -71,6 +73,17 @@ CREATE INDEX IF NOT EXISTS idx_tu_inputs_dep ON tu_inputs(dep_path);
 CREATE TABLE IF NOT EXISTS outputs (
   output_path  TEXT PRIMARY KEY,
   content_hash TEXT NOT NULL
+);
+
+-- Memoised render output: the rendered text of every page from the last render,
+-- keyed by a hash of everything that page reads (its symbols' content hashes,
+-- their cross-references, plus the render fingerprint). On an incremental build
+-- a page whose key is unchanged replays its text from here instead of running
+-- the Jinja pass again, so render work scales with the change, not the project.
+CREATE TABLE IF NOT EXISTS page_cache (
+  page_stem TEXT PRIMARY KEY,
+  key_hash  TEXT NOT NULL,
+  text      TEXT NOT NULL
 );
 """
 
@@ -198,7 +211,8 @@ class BuildCache:
         """
         self._con.executescript(
             "DROP TABLE IF EXISTS meta;DROP TABLE IF EXISTS inputs;"
-            "DROP TABLE IF EXISTS tu_inputs;DROP TABLE IF EXISTS outputs;",
+            "DROP TABLE IF EXISTS tu_inputs;DROP TABLE IF EXISTS outputs;"
+            "DROP TABLE IF EXISTS page_cache;",
         )
         self._con.executescript(_SCHEMA)
 
@@ -452,6 +466,35 @@ class BuildCache:
         self._con.executemany(
             "INSERT OR REPLACE INTO outputs(output_path, content_hash) VALUES(?, ?)",
             list(outputs.items()),
+        )
+        self._con.commit()
+
+    # -- per-page render memoisation ------------------------------------------
+
+    def cached_page(self, page_stem: str, key_hash: str) -> str | None:
+        """Return the memoised text for ``page_stem`` if its key still matches.
+
+        ``None`` means a miss — the page is new, was rendered under a different
+        key (its symbols or the render fingerprint changed), or was never cached —
+        and the caller must render it afresh.
+        """
+        row = self._con.execute(
+            "SELECT text FROM page_cache WHERE page_stem = ? AND key_hash = ?",
+            (page_stem, key_hash),
+        ).fetchone()
+        return row["text"] if row is not None else None
+
+    def record_pages(self, pages: Mapping[str, tuple[str, str]]) -> None:
+        """Replace the page cache with ``{page_stem: (key_hash, text)}``.
+
+        The table is rewritten wholesale so a page that disappeared from the
+        render (its symbol vanished) drops out, matching the render's current
+        page set exactly.
+        """
+        self._con.execute("DELETE FROM page_cache")
+        self._con.executemany(
+            "INSERT OR REPLACE INTO page_cache(page_stem, key_hash, text) VALUES(?, ?, ?)",
+            [(stem, key_hash, text) for stem, (key_hash, text) in pages.items()],
         )
         self._con.commit()
 
