@@ -1,0 +1,19 @@
+---
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+#
+# CodeRabbit configuration for clangquill.
+# See https://docs.coderabbit.ai/reference/configuration for the full schema.
+reviews:
+  pre_merge_checks:
+    # The docstring-coverage check cannot recognise this project's documentation
+    # conventions, so it misfired on every PR (see issue 88):
+    #   * C++ public API is documented with Doxygen `///` / `@brief` blocks in
+    #     headers, and internal anonymous-namespace helpers deliberately use
+    #     plain `//` comments per the project's style. The metric counts these
+    #     functions as "missing docstrings".
+    #   * Python docstrings are already enforced in CI by ruff's pydocstyle (`D`)
+    #     rules for `src/`, so the coverage gate here is redundant for Python.
+    # Disabling it removes a recurring, inaccurate warning without weakening the
+    # documentation contract that ruff already enforces.
+    docstrings:
+      mode: 'off'
