@@ -88,11 +88,26 @@ The published report also prints each tool's file and symbol counts (see
 *Reporting work, not just time* below) so a coverage mismatch is visible at a
 glance rather than hidden inside a wall-clock figure.
 
-### Single-threaded and graphviz-free
+### All-CPU parallelism and graphviz-free
 
-Doxygen runs with `HAVE_DOT = NO` and ClangQuill's parse is single-threaded, so
-neither tool gets a parallelism or call-graph-rendering advantage the other
-lacks. Sphinx is invoked single-job for the same reason.
+All three tools run with full hardware concurrency so no tool is artificially
+handicapped by a serial constraint:
+
+- **ClangQuill** defaults to `jobs = 0`, which resolves to
+  `std::thread::hardware_concurrency()` at parse time.
+- **Sphinx** is invoked with `-j auto`, which uses `os.cpu_count()` worker
+  processes for the render stage.
+- **Doxygen** has `NUM_PROC_THREADS = 0` in the generated Doxyfile, which
+  instructs Doxygen ≥ 1.9 to use all available CPU cores.
+
+`HAVE_DOT = NO` is still set to disable call-graph rendering, keeping Doxygen
+off the Graphviz dependency and ensuring neither tool spends time on diagrams.
+
+Because all tools use the same all-CPU strategy, the published wall-clock ratios
+reflect the tools' actual throughput on the available hardware rather than an
+artificial serialisation. On a shared CI runner the numbers are still
+*indicative* rather than absolute — see *Caveats* — but the parallelism playing
+field is level.
 
 ### Same inputs, isolated outputs
 
