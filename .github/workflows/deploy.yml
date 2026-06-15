@@ -32,7 +32,7 @@ jobs:
               # A plain `python -m build --wheel` tags the artefact
               # linux_<arch>, which PyPI rejects. cibuildwheel produces the
               # manylinux-tagged wheels PyPI accepts.
-        uses: pypa/cibuildwheel@v3.4.1
+        uses: pypa/cibuildwheel@v4.0.0
         env:
                   # The core links sqlite3 + nlohmann-json, sourced via vcpkg
                   # inside the manylinux image (apt is unavailable there). vcpkg
@@ -74,7 +74,7 @@ jobs:
             python -c "from clangquill import _core;
             assert _core.have_libclang();
             print(_core.__core_version__, _core.libclang_version())"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: wheels-linux-${{ matrix.arch }}
           path: ./wheelhouse/*.whl
@@ -94,7 +94,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install build
           python -m build --sdist --outdir dist/
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: sdist
           path: ./dist/*.tar.gz
