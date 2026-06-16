@@ -2,7 +2,7 @@
 #
 
 # You can set these variables from the command line.
-SPHINXOPTS    = -W --keep-going
+SPHINXOPTS    = -W --keep-going -j auto
 SPHINXBUILD   = python -m sphinx
 SPHINXPROJ    = clangquill
 SOURCEDIR     = .
