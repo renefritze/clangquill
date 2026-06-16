@@ -108,6 +108,33 @@ def test_xref_unresolved_reference_degrades_to_code(gen: Generator) -> None:
     assert gen.xref(ref) == "`std::size_t`"
 
 
+def test_xref_string_url_degrades_to_autolink(gen: Generator) -> None:
+    # Free-form @see/@sa URLs must not become C++ cross-references.
+    url = "http://en.cppreference.com/w/cpp/utility/hash"
+    result = gen.xref(url)
+    assert result == f"<{url}>"
+    assert "{cpp:" not in result
+
+
+def test_xref_string_prose_degrades_to_plain_text(gen: Generator) -> None:
+    # Multi-word prose is rendered verbatim, never as a cross-reference.
+    prose = "IntersectionFunctor to a Walker."
+    result = gen.xref(prose)
+    assert result == prose
+    assert "{cpp:" not in result
+
+
+def test_xref_string_name_keeps_role(gen: Generator) -> None:
+    # A bare C++ name is parseable, so it stays a role for the domain to resolve
+    # (or silently ignore) -- never an "Unparseable" warning.
+    assert gen.xref("some::Unknown") == "{cpp:any}`some::Unknown`"
+
+
+def test_xref_string_strips_trailing_call_syntax(gen: Generator) -> None:
+    # "geo::scale()." -> the cleaned name stays a parseable cross-reference.
+    assert gen.xref("geo::scale().") == "{cpp:any}`geo::scale`"
+
+
 def test_user_template_overrides_default_by_name(store: Store, tmp_path: Path) -> None:
     user_dir = tmp_path / "templates"
     user_dir.mkdir()

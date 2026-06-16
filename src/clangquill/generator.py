@@ -132,6 +132,11 @@ _CONTAINER_KINDS = _RECORD_KINDS | {SymbolKind.NAMESPACE}
 
 _SLUG_RE = re.compile(r"[^0-9A-Za-z]+")
 _BLANKS_RE = re.compile(r"\n{3,}")
+# Free-form ``@see``/``@sa`` text classification: a leading URL scheme is turned
+# into a link, and trailing call/punctuation noise (``foo().``) is stripped so
+# the cleaned name stays a parseable C++ cross-reference.
+_XREF_URL_RE = re.compile(r"^(?:https?|mailto):", re.IGNORECASE)
+_XREF_TRAILING_RE = re.compile(r"(?:\(\s*\)|[.,;:()\s])+$")
 
 
 def _slug(name: str) -> str:
@@ -489,11 +494,17 @@ class Generator:
         An *unresolved* reference (a builtin, template parameter, or out-of-TU
         type) degrades to inline code of its written spelling, since there is no
         domain object to point at.
+
+        A bare string comes from free-form ``@see``/``@sa`` text, which may be a
+        symbol name, a USR, a URL, or prose. A name (or USR) becomes a
+        ``{cpp:any}`` role for the C++ domain to resolve, but a URL or prose is
+        *not* valid C++ syntax, so it degrades by shape (URL -> link, prose ->
+        plain text). With ``nitpicky`` off an unresolved-but-parseable role is
+        silent, whereas a URL/prose role is an "Unparseable C++ cross-reference"
+        warning -- hence the split.
         """
         if isinstance(target, str):
-            resolved = self.store.symbol(target)
-            name = resolved.qualified_name if resolved is not None else target
-            return f"{{cpp:{role}}}`{name}`" if name else ""
+            return self._xref_string(target, role)
         to_usr = getattr(target, "to_usr", None)
         if to_usr is not None:  # a Reference
             resolved = self.store.symbol(to_usr) if to_usr else None
@@ -504,6 +515,27 @@ class Generator:
             # the output carries no dangling cross-reference.
             return f"`{target.to_spelling}`" if target.to_spelling else ""
         name = target.qualified_name or target.spelling
+        return f"{{cpp:{role}}}`{name}`" if name else ""
+
+    def _xref_string(self, target: str, role: str) -> str:
+        """Render free-form ``@see``/``@sa`` text by shape (see :meth:`xref`)."""
+        text = target.strip()
+        if not text:
+            return ""
+        # A URL -> MyST autolink (myst_url_schemes allows http/https/mailto).
+        if _XREF_URL_RE.match(text):
+            return f"<{text}>"
+        # Multi-word prose is not a C++ name -> render verbatim so the domain
+        # never tries (and fails) to parse it as a cross-reference.
+        if any(c.isspace() for c in text):
+            return text
+        # A USR resolves to its qualified name; a plain name is left for the
+        # domain to resolve. Trailing call/punctuation noise (``foo().``) is
+        # stripped so the cleaned name stays parseable.
+        resolved = self.store.symbol(text)
+        if resolved is not None:
+            return f"{{cpp:{role}}}`{resolved.qualified_name}`"
+        name = _XREF_TRAILING_RE.sub("", text)
         return f"{{cpp:{role}}}`{name}`" if name else ""
 
     # -- comment rendering ----------------------------------------------------
