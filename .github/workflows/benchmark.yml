@@ -62,6 +62,14 @@ jobs:
           persist-credentials: false
       - name: Install doxygen
         run: |
+          # The runner image ships Microsoft apt repos (azure-cli, prod) that
+          # intermittently return 403 and abort `apt-get update`. We only need
+          # packages from the standard Ubuntu archives, so drop them first. The
+          # removal persists for the later LLVM step's apt operations too.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
+                     /etc/apt/sources.list.d/azure-cli.list \
+                     /etc/apt/sources.list.d/microsoft-prod.sources \
+                     /etc/apt/sources.list.d/azure-cli.sources
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends doxygen
       - name: Install build dependencies (LLVM 22 + system libs)
