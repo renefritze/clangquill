@@ -317,6 +317,59 @@ def test_group_by_namespace_nests_subnamespaces_and_lumps_operators(ns_db: Path,
     assert "app_operators" in pages
 
 
+def test_repair_split_operators_rejoins_eqeq() -> None:
+    from clangquill.generator import _repair_split_operators  # noqa: PLC0415
+
+    # libclang prints the first `==` of a SFINAE expression as `= =`; rejoin it.
+    assert (
+        _repair_split_operators("std::enable_if<G::dimension = = 2 || G::dimension == 3, void>")
+        == "std::enable_if<G::dimension == 2 || G::dimension == 3, void>"
+    )
+    assert _repair_split_operators("a =   = b") == "a == b"
+    # A single `=` (a default argument / alias) must be left untouched.
+    assert _repair_split_operators("template<int N = 4>") == "template<int N = 4>"
+    assert _repair_split_operators("using T = int") == "using T = int"
+
+
+def test_signature_repairs_split_eqeq_for_function(gen: Generator, store: Store) -> None:
+    import dataclasses  # noqa: PLC0415
+
+    # A function whose pretty-printed signature carries libclang's `= =` artifact
+    # must emit a parseable `==` so the Sphinx C++ domain does not choke on it.
+    broken = dataclasses.replace(
+        _symbol(store, "geo::scale"),
+        signature="enable_if_t<D = = 2, Circle> geo::scale(const Circle &c)",
+    )
+    out = gen.signature(broken)
+    assert "= =" not in out
+    assert "D == 2" in out
+
+
+def test_signature_repairs_split_eqeq_for_concept_and_class_template(m7_db: Path) -> None:
+    import dataclasses  # noqa: PLC0415
+
+    # The repair also covers the template-head branches: a concept and a class
+    # template whose head carries libclang's `= =` must emit a parseable `==`.
+    with Store.open(m7_db) as store:
+        gen = Generator(store)
+
+        concept = dataclasses.replace(
+            _symbol(store, "nn::Addable"),
+            signature="template<class T> requires (sizeof(T) = = 4)",
+        )
+        concept_out = gen.signature(concept)
+        assert "= =" not in concept_out
+        assert "sizeof(T) == 4" in concept_out
+
+        template = dataclasses.replace(
+            _symbol(store, "nn::Box"),
+            signature="template<class T, bool B = (sizeof(T) = = 4)>",
+        )
+        template_out = gen.signature(template)
+        assert "= =" not in template_out
+        assert "sizeof(T) == 4" in template_out
+
+
 def test_relpath_filter_reroots_under_base(store: Store) -> None:
     gen = Generator(store, path_base="/work/repo")
     # A file under the base is shown relative, with forward slashes.
