@@ -907,7 +907,14 @@ class Generator:
         self._emit_function_pages(scope, functions, plans, seen, top_level=top_level, entries=entries)
         self._emit_lumped_page("types", "Types", scope, types, plans, seen, top_level=top_level, entries=entries)
         self._emit_lumped_page(
-            "constants", "Constants", scope, constants, plans, seen, top_level=top_level, entries=entries,
+            "constants",
+            "Constants",
+            scope,
+            constants,
+            plans,
+            seen,
+            top_level=top_level,
+            entries=entries,
         )
         return entries
 
@@ -982,7 +989,14 @@ class Generator:
             )
             entries.append((stem, name))
         self._emit_lumped_page(
-            "operators", "Operators", scope, operators, plans, seen, top_level=top_level, entries=entries,
+            "operators",
+            "Operators",
+            scope,
+            operators,
+            plans,
+            seen,
+            top_level=top_level,
+            entries=entries,
         )
 
     def _emit_lumped_page(  # noqa: PLR0913
