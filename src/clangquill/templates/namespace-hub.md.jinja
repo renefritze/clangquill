@@ -1,0 +1,13 @@
+{{ "#" * level }} Namespace `{{ name }}`
+
+{{ render_comment(comment) }}
+{% if children %}
+
+```{toctree}
+:maxdepth: 1
+
+{% for stem, label in children %}
+{{ label }} <{{ stem }}>
+{% endfor %}
+```
+{% endif %}

@@ -69,7 +69,7 @@ def test_validate_rejects_unknown_group_by():
         Config(input=["a.hpp"], group_by="nonsense").validate()
 
 
-@pytest.mark.parametrize("mode", ["symbol", "file", "class"])
+@pytest.mark.parametrize("mode", ["symbol", "file", "class", "namespace"])
 def test_validate_accepts_known_group_by(mode: str):
     assert Config(input=["a.hpp"], group_by=mode).validate().group_by == mode
 
