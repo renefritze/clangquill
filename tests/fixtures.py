@@ -330,6 +330,96 @@ def _build_multifile_db(path: Path) -> None:
         con.close()
 
 
+def _build_ns_db(path: Path) -> None:
+    """Populate ``path`` with a nested namespace exercising ``group_by="namespace"``.
+
+    ``app`` holds a sub-namespace (with its own class), a class, a free function
+    with two overloads, two free operators, an enum, a typedef, and a variable —
+    everything the hierarchical grouping must route to a hub toctree, per-name
+    function pages, a lumped operators page, and grouped types/constants pages.
+    """
+    con = sqlite3.connect(path)
+    try:
+        con.executescript(_schema_ddl())
+        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', '1')")
+        con.execute("INSERT INTO files(id, path, sha256, size_bytes) VALUES(1, 'app.hpp', 'abc', 256)")
+
+        def sym(  # noqa: PLR0913
+            usr: str,
+            parent: str,
+            kind: int,
+            spelling: str,
+            qname: str,
+            *,
+            signature: str = "",
+            type_repr: str = "",
+        ) -> None:
+            con.execute(
+                "INSERT INTO symbols(usr, parent_usr, kind, spelling, qualified_name, "
+                "display_name, signature, type_repr, access, is_definition, "
+                "is_documented, content_hash, file_id, line) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 1, ?, 1, 0)",
+                (usr, parent, kind, spelling, qname, qname, signature, type_repr, "hash-" + usr),
+            )
+
+        app = "c:@N@app"
+        sub = "c:@N@app@N@sub"
+        gadget = "c:@N@app@N@sub@S@Gadget"
+        widget = "c:@N@app@S@Widget"
+        make1 = "c:@N@app@F@make#1"
+        make2 = "c:@N@app@F@make#2"
+        eq = "c:@N@app@F@operatoreq"
+        shl = "c:@N@app@F@operatorshl"
+        mode = "c:@N@app@E@Mode"
+        size_t = "c:@N@app@T@Size"
+        limit = "c:@N@app@limit"
+
+        sym(app, "", 1, "app", "app")
+        sym(sub, app, 1, "sub", "app::sub")
+        sym(gadget, sub, 2, "Gadget", "app::sub::Gadget")
+        sym(widget, app, 2, "Widget", "app::Widget")
+        sym(make1, app, 5, "make", "app::make", signature="Widget make()", type_repr="Widget ()")
+        sym(make2, app, 5, "make", "app::make", signature="Widget make(int n)", type_repr="Widget (int)")
+        sym(eq, app, 5, "operator==", "app::operator==", signature="bool operator==(Widget, Widget)")
+        sym(shl, app, 5, "operator<<", "app::operator<<", signature="void operator<<(int, int)")
+        sym(mode, app, 11, "Mode", "app::Mode")
+        sym(size_t, app, 13, "Size", "app::Size", type_repr="unsigned long")
+        sym(limit, app, 10, "limit", "app::limit", type_repr="const int")
+
+        for usr, brief in (
+            (app, "The app namespace."),
+            (sub, "A sub-namespace."),
+            (gadget, "A gadget."),
+            (widget, "A widget."),
+            (make1, "Make a widget."),
+            (make2, "Make a widget from a count."),
+            (eq, "Compare widgets."),
+            (shl, "Shift ints."),
+            (mode, "A mode."),
+            (size_t, "A size alias."),
+            (limit, "A limit."),
+        ):
+            con.execute(
+                "INSERT INTO comments(symbol_usr, raw_text, format, fields_json) VALUES(?, '/// fixture', 'doxygen', '')",
+                (usr,),
+            )
+            con.execute(
+                "INSERT INTO comment_fields(symbol_usr, name, arg, value, ordinal) VALUES(?, 'brief', '', ?, 0)",
+                (usr, brief),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+
+@pytest.fixture
+def ns_db(tmp_path: Path) -> Path:
+    """Return an IR database with a nested namespace for hierarchical grouping."""
+    path = tmp_path / "app.sqlite"
+    _build_ns_db(path)
+    return path
+
+
 @pytest.fixture
 def fixture_db(tmp_path: Path) -> Path:
     """Return the path to a freshly built fixture IR database."""

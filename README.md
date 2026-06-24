@@ -27,6 +27,8 @@ with inter-symbol links resolved through `{cpp:any}`.
   delete pages for symbols that disappeared.
 - **Customizable output** via per-kind Jinja2 templates you can override one file
   at a time.
+- **Choosable page layout** (`clangquill_group_by`): one page per `symbol`,
+  per `file`, per `class`, or a browsable `namespace` hierarchy (see below).
 - **Pluggable comment parsers** (Doxygen by default).
 
 ## Installation
@@ -103,6 +105,26 @@ from clangquill.store import Store
 with Store.open("api.sqlite") as store:
     Generator(store).generate("docs/api")
 ```
+
+## Page layout
+
+`clangquill_group_by` (CLI `--group-by`, API `generate(group_by=...)`) chooses how
+symbols are partitioned into pages:
+
+- **`symbol`** (default) — one page per top-level symbol. A single root namespace
+  collapses its whole subtree onto one page.
+- **`file`** — one page per parsed source file.
+- **`class`** — one page per documented class/namespace. Splits a colossal
+  namespace into a page per member class, but the root `index` still lists every
+  page in one flat toctree.
+- **`namespace`** — a **browsable hierarchy**. The root `index` links only the
+  top-level namespaces; each namespace gets a navigational *hub* page whose
+  toctree links its sub-namespaces, one page per class, one page per
+  free-function *name* (overloads together), a single lumped *operators* page,
+  and grouped *types* (enums/typedefs/aliases/concepts) and *constants*
+  (variables/macros) pages. Best for large libraries where a flat index would be
+  unreadable: you drill down *all namespaces → everything in a namespace →
+  individual class/function pages*.
 
 ## Incremental builds
 

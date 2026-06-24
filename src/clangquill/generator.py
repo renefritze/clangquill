@@ -130,6 +130,27 @@ _RECORD_KINDS = frozenset(
 # its own page. Everything else is a leaf collected onto its namespace's page.
 _CONTAINER_KINDS = _RECORD_KINDS | {SymbolKind.NAMESPACE}
 
+# Leaf kinds collected onto a namespace's "Types" page under
+# ``group_by="namespace"`` (type-like declarations that do not earn a page).
+_TYPE_LEAF_KINDS = frozenset(
+    {
+        SymbolKind.ENUM,
+        SymbolKind.TYPEDEF,
+        SymbolKind.TYPE_ALIAS,
+        SymbolKind.CONCEPT,
+    },
+)
+
+# Leaf kinds collected onto a namespace's "Constants" page under
+# ``group_by="namespace"`` (value declarations: namespace-scope variables and,
+# at global scope, macros).
+_CONST_LEAF_KINDS = frozenset(
+    {
+        SymbolKind.VARIABLE,
+        SymbolKind.MACRO,
+    },
+)
+
 _SLUG_RE = re.compile(r"[^0-9A-Za-z]+")
 _BLANKS_RE = re.compile(r"\n{3,}")
 # Free-form ``@see``/``@sa`` text classification: a leading URL scheme is turned
@@ -157,11 +178,15 @@ class RenderedPage:
     ``stem`` is the filename without extension, ``label`` the human-readable
     toctree caption, and ``text`` the full MyST content. Keeping the content
     separate from the write lets the pipeline hash it and skip unchanged pages.
+    ``top_level`` marks pages that belong in the root ``index`` toctree; under a
+    hierarchical grouping (``group_by="namespace"``) only the top namespaces are
+    top-level and every deeper page is reached through a parent's own toctree.
     """
 
     stem: str
     label: str
     text: str
+    top_level: bool = True
 
 
 # Record separator between dependency tokens, and unit separator within a token
@@ -188,6 +213,11 @@ class PagePlan:
     is set instead for a documentation-group page. ``file_scope`` mirrors the
     file id a file-grouped page renders under, so the dependency walk stays
     inside that file exactly like the render does.
+
+    ``top_level`` marks the pages the root ``index`` toctree links (every page
+    for the flat groupings; only the top namespaces for ``group_by="namespace"``).
+    ``toctree`` lists the child page stems a hub page embeds in its own toctree,
+    so the per-page fingerprint busts the hub when its child set changes.
     """
 
     stem: str
@@ -197,6 +227,8 @@ class PagePlan:
     shallow_seeds: tuple[Symbol, ...] = ()
     group: Group | None = None
     file_scope: int | None = field(default=None)
+    top_level: bool = True
+    toctree: tuple[str, ...] = ()
 
 
 class Generator:
@@ -601,20 +633,58 @@ class Generator:
         template = self.env.get_template("namespace-page.md.jinja")
         return _normalize(template.render(symbol=symbol, symbols=members, level=level))
 
+    def render_namespace_hub(
+        self,
+        symbol: Symbol | None,
+        children: Sequence[tuple[str, str]],
+        *,
+        level: int = 1,
+    ) -> str:
+        """Render a namespace's navigational hub page under ``group_by="namespace"``.
+
+        The hub carries the namespace heading and its own documentation, then a
+        ``toctree`` of ``children`` (``(stem, label)`` pairs for its
+        sub-namespaces, classes, per-name function pages and the grouped
+        operators/types/constants pages). It renders no member bodies itself —
+        those live on the linked pages — so the page stays a compact index even
+        for a huge namespace. ``symbol`` is ``None`` only for the synthetic
+        global scope, which is rendered by the root index rather than here.
+        """
+        comment = self.comment(symbol) if symbol is not None else None
+        name = (symbol.qualified_name if symbol is not None else "") or "(global namespace)"
+        template = self.env.get_template("namespace-hub.md.jinja")
+        return _normalize(template.render(name=name, comment=comment, children=children, level=level))
+
+    def render_member_page(self, title: str, members: Sequence[Symbol], *, level: int = 1) -> str:
+        """Render a titled page listing ``members`` in full (each via its kind template).
+
+        Backs the per-name function pages and the grouped operators/types/
+        constants pages of ``group_by="namespace"``: ``title`` is the rendered
+        MyST heading text (e.g. ``Function `geo::scale``` or ``Operators in
+        `geo```) and each member renders one level deeper.
+        """
+        template = self.env.get_template("member-page.md.jinja")
+        return _normalize(template.render(title=title, symbols=members, level=level))
+
     def render_pages(self, *, group_by: str = "symbol") -> list[RenderedPage]:
         r"""Render every page in memory without writing, in toctree order.
 
         ``group_by`` selects the page partitioning: ``"symbol"`` yields one page
-        per top-level symbol, ``"file"`` one page per parsed source file, and
+        per top-level symbol, ``"file"`` one page per parsed source file,
         ``"class"`` one page per documented class/namespace (splitting a single
-        colossal namespace page into one page per member class). Pages for any
+        colossal namespace page into one page per member class), and
+        ``"namespace"`` a browsable hierarchy (index → namespaces → per-symbol
+        pages; see :meth:`_plan_namespace_pages`). Pages for any
         Doxygen ``\defgroup`` groups are appended after the symbol/file/class
         pages; when there are no groups nothing is appended, so output for
         group-free projects is unchanged. The caller decides how (and whether)
         to persist each :class:`RenderedPage`, which is what lets the
         incremental pipeline skip unchanged outputs.
         """
-        return [RenderedPage(plan.stem, plan.label, plan.render()) for plan in self.plan_pages(group_by=group_by)]
+        return [
+            RenderedPage(plan.stem, plan.label, plan.render(), top_level=plan.top_level)
+            for plan in self.plan_pages(group_by=group_by)
+        ]
 
     def plan_pages(self, *, group_by: str = "symbol") -> list[PagePlan]:
         r"""Plan every page (stem, label, render thunk, dependencies) in order.
@@ -629,6 +699,8 @@ class Generator:
             plans = self._plan_file_pages()
         elif group_by == "class":
             plans = self._plan_class_pages()
+        elif group_by == "namespace":
+            plans = self._plan_namespace_pages()
         else:
             plans = self._plan_symbol_pages()
         return plans + self._plan_group_pages()
@@ -641,11 +713,15 @@ class Generator:
     ) -> str:
         """Render the toctree index page that links ``pages`` in order.
 
-        Only each entry's ``stem`` and ``label`` are read, so a list of rendered
-        pages or of unrendered :class:`PagePlan` objects works interchangeably.
+        Only each entry's ``stem``, ``label`` and ``top_level`` are read, so a
+        list of rendered pages or of unrendered :class:`PagePlan` objects works
+        interchangeably. Pages flagged not ``top_level`` are omitted: under a
+        hierarchical grouping they are reached through a parent's toctree, so the
+        root index lists only the top namespaces rather than every page.
         """
         index = self.env.get_template("index.md.jinja")
-        return index.render(pages=[(p.stem, p.label) for p in pages], maxdepth=toctree_maxdepth)
+        entries = [(p.stem, p.label) for p in pages if getattr(p, "top_level", True)]
+        return index.render(pages=entries, maxdepth=toctree_maxdepth)
 
     def generate(
         self,
@@ -658,8 +734,9 @@ class Generator:
         """Render the IR into ``out_dir`` and write a toctree index.
 
         ``group_by`` selects the page partitioning: ``"symbol"`` writes one page
-        per top-level symbol, ``"file"`` one page per parsed source file, and
-        ``"class"`` one page per documented class/namespace.
+        per top-level symbol, ``"file"`` one page per parsed source file,
+        ``"class"`` one page per documented class/namespace, and ``"namespace"``
+        a browsable index → namespace → per-symbol hierarchy.
         ``toctree_maxdepth`` and ``root_document`` shape the generated index
         page (written as ``<root_document>.md``). Returns the page stems written
         (excluding the index), in toctree order.
@@ -764,6 +841,200 @@ class Generator:
             if child.kind in _CONTAINER_KINDS:
                 self._emit_class_plans(child, plans, seen)
 
+    def _plan_namespace_pages(self) -> list[PagePlan]:
+        r"""Plan a browsable hierarchy: index → namespaces → per-symbol pages.
+
+        Where :meth:`_plan_class_pages` still lists *every* class and namespace
+        in one flat index, this builds a true tree. The root index lists only the
+        top-level namespaces; each namespace gets a navigational *hub* page whose
+        toctree links its sub-namespaces, one page per class/record, one page per
+        free-function *name* (all overloads together), a single lumped
+        *operators* page, and grouped *types* (enums/typedefs/aliases/concepts)
+        and *constants* (variables/macros) pages. A single colossal flat index
+        therefore becomes a navigable namespace hierarchy.
+        """
+        plans: list[PagePlan] = []
+        seen: set[str] = set()
+        # The global scope is the root index itself, so its direct entries (the
+        # top namespaces and any global free symbols) are the top-level pages.
+        self._emit_namespace_scope(None, self.roots(), plans, seen, top_level=True)
+        return plans
+
+    def _emit_namespace_scope(
+        self,
+        scope: Symbol | None,
+        members: Sequence[Symbol],
+        plans: list[PagePlan],
+        seen: set[str],
+        *,
+        top_level: bool,
+    ) -> list[tuple[str, str]]:
+        """Append pages for ``members`` and return this scope's toctree entries.
+
+        ``scope`` is the enclosing namespace (``None`` at global scope). The
+        returned ``(stem, label)`` pairs are what the scope's own toctree links —
+        the root index at global scope, or the namespace hub otherwise. Pages
+        created directly here inherit ``top_level``; nested scopes recurse with
+        ``top_level=False`` so only the outermost namespaces reach the index.
+        """
+        entries: list[tuple[str, str]] = []
+        namespaces = sorted(
+            (m for m in members if m.kind == SymbolKind.NAMESPACE),
+            key=lambda s: s.spelling,
+        )
+        records = sorted(
+            (m for m in members if m.kind in _RECORD_KINDS),
+            key=lambda s: s.spelling,
+        )
+        functions = [m for m in members if m.kind in _FUNCTION_KINDS]
+        types = [m for m in members if m.kind in _TYPE_LEAF_KINDS]
+        constants = [m for m in members if m.kind in _CONST_LEAF_KINDS]
+
+        for ns in namespaces:
+            self._emit_namespace_hub(ns, plans, seen, top_level=top_level, entries=entries)
+        for record in records:
+            stem = self._unique_stem(_slug(record.qualified_name or record.spelling), seen)
+            plans.append(
+                PagePlan(
+                    stem,
+                    record.qualified_name or record.spelling,
+                    partial(self.render_symbol, record),
+                    subtree_seeds=(record,),
+                    top_level=top_level,
+                ),
+            )
+            entries.append((stem, record.spelling))
+        self._emit_function_pages(scope, functions, plans, seen, top_level=top_level, entries=entries)
+        self._emit_lumped_page("types", "Types", scope, types, plans, seen, top_level=top_level, entries=entries)
+        self._emit_lumped_page(
+            "constants",
+            "Constants",
+            scope,
+            constants,
+            plans,
+            seen,
+            top_level=top_level,
+            entries=entries,
+        )
+        return entries
+
+    def _emit_namespace_hub(
+        self,
+        ns: Symbol,
+        plans: list[PagePlan],
+        seen: set[str],
+        *,
+        top_level: bool,
+        entries: list[tuple[str, str]],
+    ) -> None:
+        """Emit the hub page for ``ns`` (and its subtree) and link it in ``entries``.
+
+        The subtree is planned first so the hub's toctree can list the stems its
+        children received. An empty, undocumented namespace shell is dropped (it
+        would render an empty toctree and nothing links to it); a documented one
+        is kept as a landing page.
+        """
+        sub_entries = self._emit_namespace_scope(ns, self.children(ns), plans, seen, top_level=False)
+        if not sub_entries and not ns.is_documented:
+            return
+        stem = self._unique_stem(_slug(ns.qualified_name or ns.spelling), seen)
+        plans.append(
+            PagePlan(
+                stem,
+                ns.qualified_name or ns.spelling,
+                partial(self.render_namespace_hub, ns, sub_entries),
+                shallow_seeds=(ns,),
+                toctree=tuple(s for s, _ in sub_entries),
+                top_level=top_level,
+            ),
+        )
+        entries.append((stem, ns.spelling))
+
+    def _emit_function_pages(  # noqa: PLR0913
+        self,
+        scope: Symbol | None,
+        functions: Sequence[Symbol],
+        plans: list[PagePlan],
+        seen: set[str],
+        *,
+        top_level: bool,
+        entries: list[tuple[str, str]],
+    ) -> None:
+        """Emit one page per free-function name plus one lumped operators page.
+
+        Overloads sharing a name render together on that name's page; every free
+        operator (whatever the symbol) collects onto a single ``operators`` page
+        for the scope, since per-operator pages would have unreadable stems and
+        a namespace can hold dozens of them.
+        """
+        named: dict[str, list[Symbol]] = {}
+        operators: list[Symbol] = []
+        for func in functions:
+            if func.spelling.startswith("operator"):
+                operators.append(func)
+            else:
+                named.setdefault(func.spelling, []).append(func)
+        for name in sorted(named):
+            overloads = sorted(named[name], key=lambda s: s.signature)
+            qname = overloads[0].qualified_name or overloads[0].spelling
+            stem = self._unique_stem(_slug(qname), seen)
+            plans.append(
+                PagePlan(
+                    stem,
+                    qname,
+                    partial(self.render_member_page, f"Function `{qname}`", tuple(overloads)),
+                    subtree_seeds=tuple(overloads),
+                    top_level=top_level,
+                ),
+            )
+            entries.append((stem, name))
+        self._emit_lumped_page(
+            "operators",
+            "Operators",
+            scope,
+            operators,
+            plans,
+            seen,
+            top_level=top_level,
+            entries=entries,
+        )
+
+    def _emit_lumped_page(  # noqa: PLR0913
+        self,
+        suffix: str,
+        label: str,
+        scope: Symbol | None,
+        members: Sequence[Symbol],
+        plans: list[PagePlan],
+        seen: set[str],
+        *,
+        top_level: bool,
+        entries: list[tuple[str, str]],
+    ) -> None:
+        """Emit one combined page holding ``members`` (operators/types/constants).
+
+        ``suffix`` names the page within its scope (``geo::types``) and ``label``
+        is its short toctree caption (``Types``). Nothing is emitted for an empty
+        ``members``, so a namespace without, say, any constants grows no page.
+        """
+        if not members:
+            return
+        members = sorted(members, key=lambda s: (s.spelling, s.signature))
+        scope_name = scope.qualified_name if scope is not None else ""
+        base = f"{scope_name}::{suffix}" if scope_name else suffix
+        stem = self._unique_stem(_slug(base), seen)
+        where = f"`{scope_name}`" if scope_name else "the global namespace"
+        plans.append(
+            PagePlan(
+                stem,
+                base,
+                partial(self.render_member_page, f"{label} in {where}", tuple(members)),
+                subtree_seeds=tuple(members),
+                top_level=top_level,
+            ),
+        )
+        entries.append((stem, label))
+
     def _plan_group_pages(self) -> list[PagePlan]:
         """Plan one page per documentation group, top-level groups first.
 
@@ -798,6 +1069,10 @@ class Generator:
         so this method need only track the IR data the bundled templates read.
         """
         tokens: list[str] = []
+        # A hub page's text is its toctree of child stems, so a changed child set
+        # (a class added/renamed, a function gained) must bust it even though the
+        # namespace node itself is unchanged.
+        tokens.extend(f"TOC{_DEP_FIELD_SEP}{stem}" for stem in plan.toctree)
         if plan.group is not None:
             self._collect_group_tokens(plan.group, tokens)
         else:

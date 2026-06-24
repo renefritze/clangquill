@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 CONFIG_PREFIX = "clangquill_"
 
 # Permitted values for ``group_by`` (how generated pages are partitioned).
-GROUP_BY_CHOICES = ("symbol", "file", "class")
+GROUP_BY_CHOICES = ("symbol", "file", "class", "namespace")
 
 
 # ``bool`` is an ``int`` subclass, but an int config field is never a flag.

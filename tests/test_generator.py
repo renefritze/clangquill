@@ -224,6 +224,99 @@ def test_group_by_class_pages_global_macros_and_nested_records(m7_db: Path, tmp_
     assert (out / "nn_Box.md").read_text().startswith("# Class template `nn::Box`")
 
 
+def test_group_by_namespace_index_lists_only_top_namespaces(gen: Generator, tmp_path: Path) -> None:
+    # The root index of the hierarchical grouping is the entry point to the tree:
+    # it links the top namespace(s) only, not every class/function, so the
+    # colossal flat index becomes a short, browsable list.
+    out = tmp_path / "api"
+    gen.generate(out, group_by="namespace")
+    index = (out / "index.md").read_text()
+    assert index.startswith("# API Reference")
+    assert "\ngeo\n" in index
+    # The deep pages are reached through the namespace hub, not the root index.
+    assert "geo_Circle" not in index
+    assert "geo_scale" not in index
+
+
+def test_group_by_namespace_hub_links_members_without_inlining(gen: Generator, tmp_path: Path) -> None:
+    # A namespace becomes a navigational hub: heading, its own docs, and a
+    # toctree linking each member page. No member body is inlined, so the hub
+    # stays compact however large the namespace.
+    out = tmp_path / "api"
+    pages = gen.generate(out, group_by="namespace")
+    assert set(pages) == {"geo", "geo_Circle", "geo_Shape", "geo_scale", "geo_mystery", "geo_types", "geo_constants"}
+
+    hub = (out / "geo.md").read_text()
+    assert hub.startswith("# Namespace `geo`")
+    assert "```{toctree}" in hub
+    # Classes, the free function, and the grouped pages are linked with short labels.
+    assert "Circle <geo_Circle>" in hub
+    assert "scale <geo_scale>" in hub
+    assert "Types <geo_types>" in hub
+    assert "Constants <geo_constants>" in hub
+    # The hub links bodies; it never inlines a member directive.
+    assert "{cpp:class}" not in hub
+    assert "{cpp:function}" not in hub
+
+
+def test_group_by_namespace_pages_split_per_symbol(gen: Generator, tmp_path: Path) -> None:
+    # Each class and each free-function name earns its own page; the namespace's
+    # type-like and value-like leaves collect onto a Types and a Constants page.
+    out = tmp_path / "api"
+    gen.generate(out, group_by="namespace")
+
+    assert (out / "geo_Circle.md").read_text().startswith("# Class `geo::Circle`")
+    scale = (out / "geo_scale.md").read_text()
+    assert scale.startswith("# Function `geo::scale`")
+    assert "{cpp:function} Circle geo::scale" in scale
+
+    types = (out / "geo_types.md").read_text()
+    assert types.startswith("# Types in `geo`")
+    assert "{cpp:enum} geo::Color" in types
+    assert "{cpp:type} geo::Distance" in types
+
+    constants = (out / "geo_constants.md").read_text()
+    assert constants.startswith("# Constants in `geo`")
+    assert "{cpp:var} const double geo::pi" in constants
+
+
+def test_group_by_namespace_nests_subnamespaces_and_lumps_operators(ns_db: Path, tmp_path: Path) -> None:
+    # A sub-namespace is a child hub (reached through its parent, not the root
+    # index); overloads of one name share a page; and every free operator lumps
+    # onto a single operators page rather than spawning a page each.
+    with Store.open(ns_db) as store:
+        out = tmp_path / "api"
+        pages = Generator(store).generate(out, group_by="namespace")
+
+    # Only the top namespace is at the index root; app::sub is nested under it.
+    index = (out / "index.md").read_text()
+    assert "\napp\n" in index
+    assert "app_sub" not in index
+
+    hub = (out / "app.md").read_text()
+    assert "sub <app_sub>" in hub
+    assert "make <app_make>" in hub
+    assert "Operators <app_operators>" in hub
+
+    # The sub-namespace is its own hub page listing its class.
+    sub = (out / "app_sub.md").read_text()
+    assert sub.startswith("# Namespace `app::sub`")
+    assert "Gadget <app_sub_Gadget>" in sub
+
+    # Both make() overloads render on the single name page.
+    make = (out / "app_make.md").read_text()
+    assert "Widget app::make()" in make
+    assert "Widget app::make(int n)" in make
+
+    # Both free operators lump onto one operators page; no per-operator pages.
+    operators = (out / "app_operators.md").read_text()
+    assert operators.startswith("# Operators in `app`")
+    assert "operator==" in operators
+    assert "operator<<" in operators
+    assert not (out / "app_operatoreq.md").exists()
+    assert "app_operators" in pages
+
+
 def test_relpath_filter_reroots_under_base(store: Store) -> None:
     gen = Generator(store, path_base="/work/repo")
     # A file under the base is shown relative, with forward slashes.
