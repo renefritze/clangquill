@@ -158,6 +158,17 @@ _BLANKS_RE = re.compile(r"\n{3,}")
 # the cleaned name stays a parseable C++ cross-reference.
 _XREF_URL_RE = re.compile(r"^(?:https?|mailto):", re.IGNORECASE)
 _XREF_TRAILING_RE = re.compile(r"(?:\(\s*\)|[.,;:()\s])+$")
+# libclang's pretty-printer occasionally splits the first ``==`` of a SFINAE /
+# ``enable_if`` expression into ``= =`` (e.g. ``G::dimension = = 2``). That text
+# is stored verbatim in the signature, and ``= =`` is not valid C++, so the
+# Sphinx C++ domain fails to parse the emitted directive. ``= =`` can never occur
+# in a well-formed declaration, so rejoining it to ``==`` is a safe repair.
+_SPLIT_EQEQ_RE = re.compile(r"=\s+=")
+
+
+def _repair_split_operators(text: str) -> str:
+    """Rejoin a ``==`` libclang's pretty-printer rendered as ``= =`` (see :data:`_SPLIT_EQEQ_RE`)."""
+    return _SPLIT_EQEQ_RE.sub("==", text)
 
 
 def _slug(name: str) -> str:
@@ -453,7 +464,7 @@ class Generator:
         nesting.
         """
         if symbol.kind in _FUNCTION_KINDS:
-            sig = symbol.signature or f"{symbol.spelling}()"
+            sig = _repair_split_operators(symbol.signature) if symbol.signature else f"{symbol.spelling}()"
             return self._qualify(sig, symbol)
         if symbol.kind in (SymbolKind.VARIABLE, SymbolKind.FIELD):
             return self._variable_declaration(symbol)
@@ -467,12 +478,12 @@ class Generator:
         if symbol.kind == SymbolKind.CONCEPT:
             # ``signature`` holds the ``template<...>`` head; the cpp:concept
             # directive wants ``template<...> Name`` (no ``= constraint``).
-            head = f"{symbol.signature} " if symbol.signature else ""
+            head = f"{_repair_split_operators(symbol.signature)} " if symbol.signature else ""
             return head + symbol.qualified_name
         if symbol.kind in (SymbolKind.CLASS, SymbolKind.STRUCT, SymbolKind.UNION, SymbolKind.CLASS_TEMPLATE):
             # For a class template ``signature`` is the leading ``template<...>``
             # head; prepend it so the directive indexes a template object.
-            head = f"{symbol.signature} " if symbol.signature else ""
+            head = f"{_repair_split_operators(symbol.signature)} " if symbol.signature else ""
             return head + symbol.qualified_name + self.base_clause(symbol)
         return symbol.qualified_name
 
