@@ -73,6 +73,14 @@ jobs:
         uses: actions/checkout@v6.0.3
       - name: Install LLVM 22 from apt.llvm.org
         run: |
+          # The runner image ships Microsoft apt repos (azure-cli, prod) that
+          # intermittently return 403 and abort apt operations (llvm.sh runs
+          # apt-get update internally). We only need packages from the standard
+          # Ubuntu and apt.llvm.org archives, so drop the Microsoft repos first.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
+                     /etc/apt/sources.list.d/azure-cli.list \
+                     /etc/apt/sources.list.d/microsoft-prod.sources \
+                     /etc/apt/sources.list.d/azure-cli.sources
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 22
