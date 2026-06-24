@@ -345,6 +345,31 @@ def test_signature_repairs_split_eqeq_for_function(gen: Generator, store: Store)
     assert "D == 2" in out
 
 
+def test_signature_repairs_split_eqeq_for_concept_and_class_template(m7_db: Path) -> None:
+    import dataclasses  # noqa: PLC0415
+
+    # The repair also covers the template-head branches: a concept and a class
+    # template whose head carries libclang's `= =` must emit a parseable `==`.
+    with Store.open(m7_db) as store:
+        gen = Generator(store)
+
+        concept = dataclasses.replace(
+            _symbol(store, "nn::Addable"),
+            signature="template<class T> requires (sizeof(T) = = 4)",
+        )
+        concept_out = gen.signature(concept)
+        assert "= =" not in concept_out
+        assert "sizeof(T) == 4" in concept_out
+
+        template = dataclasses.replace(
+            _symbol(store, "nn::Box"),
+            signature="template<class T, bool B = (sizeof(T) = = 4)>",
+        )
+        template_out = gen.signature(template)
+        assert "= =" not in template_out
+        assert "sizeof(T) == 4" in template_out
+
+
 def test_relpath_filter_reroots_under_base(store: Store) -> None:
     gen = Generator(store, path_base="/work/repo")
     # A file under the base is shown relative, with forward slashes.
