@@ -412,6 +412,154 @@ def _build_ns_db(path: Path) -> None:
         con.close()
 
 
+def _build_spec_db(path: Path) -> None:
+    """Populate ``path`` with class-template specializations and a template ctor.
+
+    Models the cases that produced the dune-gdt docs warnings: a primary class
+    template ``ContainerFactory`` with two partial specializations (whose
+    ``display_name`` carries the specialization arguments while ``qualified_name``
+    stays bare), each with a ``create`` member, plus a class template
+    ``AdaptationHelper`` whose constructor pretty-prints with the injected
+    template-id and ``<recovery-expr>`` default arguments.
+    """
+    con = sqlite3.connect(path)
+    try:
+        con.executescript(_schema_ddl())
+        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', '1')")
+        con.execute("INSERT INTO files(id, path, sha256, size_bytes) VALUES(1, 'spec.hpp', 'spec', 256)")
+
+        def sym(  # noqa: PLR0913
+            usr: str,
+            parent: str,
+            kind: int,
+            spelling: str,
+            qname: str,
+            *,
+            display: str | None = None,
+            signature: str = "",
+            type_repr: str = "",
+        ) -> None:
+            con.execute(
+                "INSERT INTO symbols(usr, parent_usr, kind, spelling, qualified_name, "
+                "display_name, signature, type_repr, access, is_definition, "
+                "is_documented, content_hash, file_id, line) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 1, ?, 1, 0)",
+                (usr, parent, kind, spelling, qname, display if display is not None else qname, signature, type_repr, "hash-" + usr),
+            )
+
+        demo = "c:@N@demo"
+        cf_primary = "c:@N@demo@CT0@ContainerFactory"
+        cf_dense = "c:@N@demo@CTPS1@ContainerFactory"
+        cf_field = "c:@N@demo@CTPS2@ContainerFactory"
+        create_dense = cf_dense + "@F@create"
+        create_field = cf_field + "@F@create"
+        helper = "c:@N@demo@CT@AdaptationHelper"
+        helper_ctor = helper + "@F@AdaptationHelper"
+
+        sym(demo, "", 1, "demo", "demo")
+        # Primary template: display_name has no spec args (equals spelling).
+        sym(
+            cf_primary,
+            demo,
+            16,
+            "ContainerFactory",
+            "demo::ContainerFactory",
+            display="ContainerFactory",
+            signature="template<class ContainerImp>",
+        )
+        # Two specializations: display_name carries the spec args, qname is bare.
+        sym(
+            cf_dense,
+            demo,
+            16,
+            "ContainerFactory",
+            "demo::ContainerFactory",
+            display="ContainerFactory<demo::DenseVector<S>>",
+            signature="template<class S>",
+        )
+        sym(
+            cf_field,
+            demo,
+            16,
+            "ContainerFactory",
+            "demo::ContainerFactory",
+            display="ContainerFactory<demo::FieldVector<S, 4>>",
+            signature="template<class S>",
+        )
+        sym(
+            create_dense,
+            cf_dense,
+            6,
+            "create",
+            "demo::ContainerFactory::create",
+            signature="static demo::DenseVector<S> create(const size_t size)",
+            type_repr="demo::DenseVector<S> (const size_t)",
+        )
+        sym(
+            create_field,
+            cf_field,
+            6,
+            "create",
+            "demo::ContainerFactory::create",
+            signature="static demo::FieldVector<S, 4> create(const size_t size)",
+            type_repr="demo::FieldVector<S, 4> (const size_t)",
+        )
+        # Class template whose constructor carries the injected template-id and
+        # <recovery-expr> default arguments clang could not evaluate.
+        sym(
+            helper,
+            demo,
+            16,
+            "AdaptationHelper",
+            "demo::AdaptationHelper",
+            display="AdaptationHelper",
+            signature="template<class V, class GV, class RF>",
+        )
+        sym(
+            helper_ctor,
+            helper,
+            7,
+            "AdaptationHelper",
+            "demo::AdaptationHelper::AdaptationHelper",
+            signature=(
+                "AdaptationHelper<V, GV, RF>(GV &grd, "
+                'const std::string &logging_prefix = <recovery-expr>(""), '
+                "const std::array<bool, 3> &logging_state = <recovery-expr>())"
+            ),
+            type_repr="void (GV &, const std::string &, const std::array<bool, 3> &)",
+        )
+
+        for usr, brief in (
+            (demo, "Demo namespace."),
+            (cf_primary, "Container factory (primary template)."),
+            (cf_dense, "Container factory for dense vectors."),
+            (cf_field, "Container factory for field vectors."),
+            (create_dense, "Create a dense vector."),
+            (create_field, "Create a field vector."),
+            (helper, "Adaptation helper."),
+            (helper_ctor, "Construct an adaptation helper."),
+        ):
+            con.execute(
+                "INSERT INTO comments(symbol_usr, raw_text, format, fields_json) VALUES(?, '/// fixture', 'doxygen', '')",
+                (usr,),
+            )
+            con.execute(
+                "INSERT INTO comment_fields(symbol_usr, name, arg, value, ordinal) VALUES(?, 'brief', '', ?, 0)",
+                (usr, brief),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+
+@pytest.fixture
+def spec_db(tmp_path: Path) -> Path:
+    """Return an IR database with class-template specializations and a template ctor."""
+    path = tmp_path / "spec.sqlite"
+    _build_spec_db(path)
+    return path
+
+
 @pytest.fixture
 def ns_db(tmp_path: Path) -> Path:
     """Return an IR database with a nested namespace for hierarchical grouping."""
