@@ -444,7 +444,17 @@ def _build_spec_db(path: Path) -> None:
                 "display_name, signature, type_repr, access, is_definition, "
                 "is_documented, content_hash, file_id, line) "
                 "VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 1, ?, 1, 0)",
-                (usr, parent, kind, spelling, qname, display if display is not None else qname, signature, type_repr, "hash-" + usr),
+                (
+                    usr,
+                    parent,
+                    kind,
+                    spelling,
+                    qname,
+                    display if display is not None else qname,
+                    signature,
+                    type_repr,
+                    "hash-" + usr,
+                ),
             )
 
         demo = "c:@N@demo"

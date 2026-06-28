@@ -576,9 +576,7 @@ def test_member_of_specialization_qualifies_with_spec_args(spec_gen: Generator, 
     # template-id and the parent's ``template<...>`` head, so the two members no
     # longer collide on the bare ``ContainerFactory::create``.
     sym = next(
-        s
-        for s in spec_store.symbols()
-        if s.spelling == "create" and s.type_repr.startswith("demo::DenseVector")
+        s for s in spec_store.symbols() if s.spelling == "create" and s.type_repr.startswith("demo::DenseVector")
     )
     assert spec_gen.signature(sym) == (
         "template<class S> static demo::DenseVector<S> "
@@ -592,11 +590,14 @@ def test_plain_member_signature_unchanged(gen: Generator, store: Store) -> None:
 
 
 def test_constructor_injected_template_id_and_recovery_defaults_are_stripped(
-    spec_gen: Generator, spec_store: Store,
+    spec_gen: Generator,
+    spec_store: Store,
 ) -> None:
     from clangquill.store import SymbolKind  # noqa: PLC0415
 
-    ctor = next(s for s in spec_store.symbols() if s.spelling == "AdaptationHelper" and s.kind == SymbolKind.CONSTRUCTOR)
+    ctor = next(
+        s for s in spec_store.symbols() if s.spelling == "AdaptationHelper" and s.kind == SymbolKind.CONSTRUCTOR
+    )
     sig = spec_gen.signature(ctor)
     assert "<V, GV, RF>" not in sig
     assert "<recovery-expr>" not in sig
@@ -621,10 +622,7 @@ def test_strip_injected_template_id_handles_nested_args(spec_gen: Generator) -> 
 def test_strip_recovery_defaults_removes_both_forms() -> None:
     from clangquill.generator import _strip_recovery_defaults  # noqa: PLC0415
 
-    s = (
-        'void f(const std::string &p = <recovery-expr>(""), '
-        "const std::array<bool, 3> &st = <recovery-expr>())"
-    )
+    s = 'void f(const std::string &p = <recovery-expr>(""), const std::array<bool, 3> &st = <recovery-expr>())'
     assert _strip_recovery_defaults(s) == "void f(const std::string &p, const std::array<bool, 3> &st)"
     # Non-recovery defaults are left intact.
     assert _strip_recovery_defaults("void g(int n = 0, T *p = nullptr)") == "void g(int n = 0, T *p = nullptr)"

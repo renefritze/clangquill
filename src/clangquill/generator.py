@@ -187,7 +187,7 @@ def _spec_suffix(symbol: Symbol) -> str:
     spelling = symbol.spelling or ""
     if not spelling or not display.startswith(spelling):
         return ""
-    suffix = display[len(spelling):]
+    suffix = display[len(spelling) :]
     return suffix if suffix.startswith("<") else ""
 
 
@@ -642,7 +642,7 @@ class Generator:
             return "", qualified
         prefix = f"{parent.qualified_name}::"
         if qualified.startswith(prefix):
-            qualified = f"{parent.qualified_name}{suffix}::{qualified[len(prefix):]}"
+            qualified = f"{parent.qualified_name}{suffix}::{qualified[len(prefix) :]}"
         head = f"{_repair_split_operators(parent.signature)} " if parent.signature else ""
         return head, qualified
 
