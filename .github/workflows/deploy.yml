@@ -24,7 +24,7 @@ jobs:
           - os: ubuntu-24.04-arm
             arch: aarch64
     steps:
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@v7.0.0
         with:
                   # full history so setuptools_scm derives the version
           fetch-depth: 0
@@ -82,7 +82,7 @@ jobs:
     name: Source distribution
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 0
       - name: Set up Python
