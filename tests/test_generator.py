@@ -634,27 +634,38 @@ def test_specialization_pages_build_without_duplicate_or_parse_warnings(
 ) -> None:
     pytest.importorskip("sphinx")
     pytest.importorskip("myst_parser")
+    import io  # noqa: PLC0415
+
     from sphinx.application import Sphinx  # noqa: PLC0415
 
     src = tmp_path / "src"
     spec_gen.generate(src)
     (src / "conf.py").write_text('project = "spec"\nextensions = ["myst_parser"]\nmaster_doc = "index"\n')
 
-    warnings = tmp_path / "warnings.txt"
-    # warningiserror turns "Duplicate C++ declaration", "Too many template
-    # argument lists", and "Parsing of expression failed" into build failures, so
-    # a clean build proves all four warning classes are gone.
+    # Capture warnings instead of asserting statuscode or relying on build() to
+    # raise: instantiating several Sphinx apps in one test process re-registers
+    # nodes and emits unrelated "node class already registered" warnings (which
+    # bump statuscode), so we assert specifically that the four C++-domain warning
+    # classes this PR fixes never appear in the build output.
+    warning_stream = io.StringIO()
     app = Sphinx(
         str(src),
         str(src),
         str(tmp_path / "out"),
         str(tmp_path / "doctree"),
         "html",
-        warningiserror=True,
         status=None,
-        warning=warnings.open("w"),
+        warning=warning_stream,
     )
     app.build()
+    captured = warning_stream.getvalue()
+    for marker in (
+        "Duplicate C++ declaration",
+        "Too many template argument lists",
+        "Parsing of expression failed",
+        "recovery-expr",
+    ):
+        assert marker not in captured, f"unexpected C++ domain warning ({marker}):\n{captured}"
 
 
 def test_m7_kinds_build_as_domain_objects(m7_gen: Generator, tmp_path: Path) -> None:
