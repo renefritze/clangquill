@@ -171,6 +171,67 @@ def _repair_split_operators(text: str) -> str:
     return _SPLIT_EQEQ_RE.sub("==", text)
 
 
+def _spec_suffix(symbol: Symbol) -> str:
+    """Return the ``<...>`` specialization-arg suffix from ``display_name``.
+
+    For a class-template partial/explicit specialization, libclang's
+    ``display_name`` carries the specialization args after the spelling
+    (``ContainerFactory<CommonDenseVector<S>>``) while ``qualified_name`` is the
+    bare template name. The suffix lets the emitted ``cpp:class`` directive name
+    the specialization so the C++ domain does not see every specialization as a
+    duplicate of the primary template. A primary template's ``display_name`` has
+    no ``<...>`` (it equals the spelling), so the suffix is empty and the output
+    is unchanged.
+    """
+    display = symbol.display_name or ""
+    spelling = symbol.spelling or ""
+    if not spelling or not display.startswith(spelling):
+        return ""
+    suffix = display[len(spelling) :]
+    return suffix if suffix.startswith("<") else ""
+
+
+#: A default argument clang could not evaluate, emitted verbatim as
+#: ``<recovery-expr>`` (optionally followed by a balanced ``(...)`` of arguments).
+_RECOVERY_DEFAULT_RE = re.compile(r"\s*=\s*<recovery-expr>")
+
+
+def _strip_recovery_defaults(signature: str) -> str:
+    """Remove ``= <recovery-expr>(...)`` defaults clang could not evaluate.
+
+    When a default-argument expression references a declaration absent from the
+    parsed translation unit (the external DUNE headers are not present during the
+    docs parse), clang emits ``<recovery-expr>(...)`` instead of the value. That
+    text is not parseable C++, so the whole ``= <recovery-expr>(...)`` default is
+    dropped, leaving the parameter without a default (its type and name intact).
+    A balanced ``(...)`` group after ``<recovery-expr>`` is consumed so both
+    ``<recovery-expr>("")`` and ``<recovery-expr>()`` are removed cleanly; a bare
+    ``<recovery-expr>`` with no parens drops just the ``= <recovery-expr>``.
+    """
+    out: list[str] = []
+    i = 0
+    while True:
+        m = _RECOVERY_DEFAULT_RE.search(signature, i)
+        if m is None:
+            out.append(signature[i:])
+            break
+        out.append(signature[i : m.start()])
+        j = m.end()  # just past "<recovery-expr>"
+        if j < len(signature) and signature[j] == "(":
+            depth = 0
+            while j < len(signature):
+                if signature[j] == "(":
+                    depth += 1
+                elif signature[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        j += 1
+                        break
+                j += 1
+        i = j
+    return "".join(out)
+
+
 def _slug(name: str) -> str:
     """Turn a qualified name into a filesystem-safe page stem."""
     slug = _SLUG_RE.sub("_", name).strip("_")
@@ -465,6 +526,8 @@ class Generator:
         """
         if symbol.kind in _FUNCTION_KINDS:
             sig = _repair_split_operators(symbol.signature) if symbol.signature else f"{symbol.spelling}()"
+            sig = self._strip_injected_template_id(sig, symbol)
+            sig = _strip_recovery_defaults(sig)
             return self._qualify(sig, symbol)
         if symbol.kind in (SymbolKind.VARIABLE, SymbolKind.FIELD):
             return self._variable_declaration(symbol)
@@ -482,9 +545,13 @@ class Generator:
             return head + symbol.qualified_name
         if symbol.kind in (SymbolKind.CLASS, SymbolKind.STRUCT, SymbolKind.UNION, SymbolKind.CLASS_TEMPLATE):
             # For a class template ``signature`` is the leading ``template<...>``
-            # head; prepend it so the directive indexes a template object.
+            # head; prepend it so the directive indexes a template object. A
+            # specialization carries its argument list in ``display_name``; append
+            # it so the directive names the specialization rather than collapsing
+            # every specialization onto the bare template name (a duplicate).
             head = f"{_repair_split_operators(symbol.signature)} " if symbol.signature else ""
-            return head + symbol.qualified_name + self.base_clause(symbol)
+            name = symbol.qualified_name + _spec_suffix(symbol)
+            return head + name + self.base_clause(symbol)
         return symbol.qualified_name
 
     #: Trailing C array extent(s) on a type spelling, e.g. ``[8]`` or ``[2][3]``.
@@ -511,13 +578,73 @@ class Generator:
                 return f"{base} {symbol.qualified_name}{extent.group().strip()}".strip()
         return f"{type_repr} {symbol.qualified_name}".strip()
 
+    #: A ``<...>`` template-argument list allowing one level of nested ``<...>``
+    #: (covers the injected-class-name of the documented constructors, e.g.
+    #: ``Foo<Bar<X>>``). Used as an f-string fragment, so it is not pre-compiled.
+    _BALANCED_ANGLES = r"<(?:[^<>]|<[^<>]*>)*>"
+
+    def _strip_injected_template_id(self, signature: str, symbol: Symbol) -> str:
+        """Drop the injected-class-name template-id on a ctor/dtor.
+
+        A class-template constructor pretty-prints as ``Name<Args>(...)``; the
+        ``cpp:function`` directive has no template parameter list, so the trailing
+        ``<Args>`` before ``(`` is "too many template argument lists". Constructors
+        and destructors never carry their own template-id, so removing the one that
+        immediately precedes the call parens is safe and leaves ordinary methods
+        (which are not ctor/dtor) untouched.
+        """
+        if symbol.kind not in (SymbolKind.CONSTRUCTOR, SymbolKind.DESTRUCTOR):
+            return signature
+        name = symbol.spelling.lstrip("~")
+        if not name:
+            return signature
+        pattern = re.compile(rf"(?<![\w:]){re.escape(name)}\s*{self._BALANCED_ANGLES}\s*(?=\()")
+        return pattern.sub(name, signature, count=1)
+
     def _qualify(self, signature: str, symbol: Symbol) -> str:
-        """Inject the qualified name into a bare pretty-printed signature."""
-        if symbol.qualified_name == symbol.spelling or not symbol.spelling:
+        """Inject the qualified name into a bare pretty-printed signature.
+
+        When the member belongs to a class-template specialization the parent's
+        name is replaced by its specialized template-id and the specialization's
+        ``template<...>`` head is prepended, so the out-of-line member declaration
+        is unambiguous (every specialization's member would otherwise collide on
+        the bare parent name).
+        """
+        if not symbol.spelling:
+            return signature
+        head, qualified = self._member_qualifier(symbol)
+        if qualified == symbol.spelling and not head:
             return signature
         pattern = re.compile(rf"(?<![\w:]){re.escape(symbol.spelling)}(?=\s*\()")
-        new, count = pattern.subn(symbol.qualified_name, signature, count=1)
-        return new if count else signature
+        new, count = pattern.subn(qualified, signature, count=1)
+        if not count:
+            return signature
+        return f"{head}{new}" if head else new
+
+    def _member_qualifier(self, symbol: Symbol) -> tuple[str, str]:
+        """Return ``(template_head, qualified_name)`` for a member declaration.
+
+        For a member of a class-template specialization the parent qualifier carries
+        the specialization args (``ContainerFactory<CommonDenseVector<S>>::create``)
+        and ``template_head`` is the parent's ``template<...>`` head so the spec
+        args' parameters (``S``) are declared for the standalone out-of-line
+        directive. A plain member returns ``("", qualified_name)`` (legacy
+        behaviour).
+        """
+        qualified = symbol.qualified_name
+        if not symbol.parent_usr:
+            return "", qualified
+        parent = self.store.symbol(symbol.parent_usr)
+        if parent is None:
+            return "", qualified
+        suffix = _spec_suffix(parent)
+        if not suffix:
+            return "", qualified
+        prefix = f"{parent.qualified_name}::"
+        if qualified.startswith(prefix):
+            qualified = f"{parent.qualified_name}{suffix}::{qualified[len(prefix) :]}"
+        head = f"{_repair_split_operators(parent.signature)} " if parent.signature else ""
+        return head, qualified
 
     def _underlying(self, symbol: Symbol) -> str:
         """Return the typedef/alias target spelling, or ``""``."""

@@ -539,6 +539,135 @@ def test_rendered_myst_builds_as_cpp_domain_objects(gen: Generator, tmp_path: Pa
     assert sphinx.__version__  # silence unused-import concerns
 
 
+@pytest.fixture
+def spec_store(spec_db: Path) -> Iterator[Store]:
+    with Store.open(spec_db) as opened:
+        yield opened
+
+
+@pytest.fixture
+def spec_gen(spec_store: Store) -> Generator:
+    return Generator(spec_store)
+
+
+def _spec_symbol(store: Store, display_name: str) -> Symbol:
+    """Look a specialization up by ``display_name`` (its ``qualified_name`` is shared)."""
+    sym = next((s for s in store.symbols() if s.display_name == display_name), None)
+    assert sym is not None, f"missing fixture symbol with display {display_name!r}"
+    return sym
+
+
+def test_specialization_class_signature_carries_spec_args(spec_gen: Generator, spec_store: Store) -> None:
+    # Each specialization names its argument list so the C++ domain does not see
+    # every specialization as a duplicate of the bare template.
+    dense = _spec_symbol(spec_store, "ContainerFactory<demo::DenseVector<S>>")
+    field = _spec_symbol(spec_store, "ContainerFactory<demo::FieldVector<S, 4>>")
+    assert spec_gen.signature(dense) == "template<class S> demo::ContainerFactory<demo::DenseVector<S>>"
+    assert spec_gen.signature(field) == "template<class S> demo::ContainerFactory<demo::FieldVector<S, 4>>"
+
+
+def test_primary_template_signature_has_no_spec_suffix(spec_gen: Generator, spec_store: Store) -> None:
+    primary = _spec_symbol(spec_store, "ContainerFactory")
+    assert spec_gen.signature(primary) == "template<class ContainerImp> demo::ContainerFactory"
+
+
+def test_member_of_specialization_qualifies_with_spec_args(spec_gen: Generator, spec_store: Store) -> None:
+    # The ``create`` of each specialization renders with the specialized parent
+    # template-id and the parent's ``template<...>`` head, so the two members no
+    # longer collide on the bare ``ContainerFactory::create``.
+    sym = next(
+        s for s in spec_store.symbols() if s.spelling == "create" and s.type_repr.startswith("demo::DenseVector")
+    )
+    assert spec_gen.signature(sym) == (
+        "template<class S> static demo::DenseVector<S> "
+        "demo::ContainerFactory<demo::DenseVector<S>>::create(const size_t size)"
+    )
+
+
+def test_plain_member_signature_unchanged(gen: Generator, store: Store) -> None:
+    # A member whose parent is not a specialization keeps the legacy form.
+    assert gen.signature(_symbol(store, "geo::Circle::area")) == "double geo::Circle::area() const"
+
+
+def test_constructor_injected_template_id_and_recovery_defaults_are_stripped(
+    spec_gen: Generator,
+    spec_store: Store,
+) -> None:
+    from clangquill.store import SymbolKind  # noqa: PLC0415
+
+    ctor = next(
+        s for s in spec_store.symbols() if s.spelling == "AdaptationHelper" and s.kind == SymbolKind.CONSTRUCTOR
+    )
+    sig = spec_gen.signature(ctor)
+    assert "<V, GV, RF>" not in sig
+    assert "<recovery-expr>" not in sig
+    assert sig == (
+        "demo::AdaptationHelper::AdaptationHelper(GV &grd, "
+        "const std::string &logging_prefix, const std::array<bool, 3> &logging_state)"
+    )
+
+
+def test_strip_injected_template_id_handles_nested_args(spec_gen: Generator) -> None:
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from clangquill.store import SymbolKind  # noqa: PLC0415
+
+    ctor = SimpleNamespace(kind=SymbolKind.CONSTRUCTOR, spelling="Foo")
+    assert spec_gen._strip_injected_template_id("Foo<Bar<X>>(int n)", ctor) == "Foo(int n)"  # noqa: SLF001
+    # A non-ctor/dtor (e.g. a method whose own template-id is legitimate) is untouched.
+    method = SimpleNamespace(kind=SymbolKind.METHOD, spelling="Foo")
+    assert spec_gen._strip_injected_template_id("Foo<Bar<X>>(int n)", method) == "Foo<Bar<X>>(int n)"  # noqa: SLF001
+
+
+def test_strip_recovery_defaults_removes_both_forms() -> None:
+    from clangquill.generator import _strip_recovery_defaults  # noqa: PLC0415
+
+    s = 'void f(const std::string &p = <recovery-expr>(""), const std::array<bool, 3> &st = <recovery-expr>())'
+    assert _strip_recovery_defaults(s) == "void f(const std::string &p, const std::array<bool, 3> &st)"
+    # Non-recovery defaults are left intact.
+    assert _strip_recovery_defaults("void g(int n = 0, T *p = nullptr)") == "void g(int n = 0, T *p = nullptr)"
+
+
+def test_specialization_pages_build_without_duplicate_or_parse_warnings(
+    spec_gen: Generator,
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("sphinx")
+    pytest.importorskip("myst_parser")
+    import io  # noqa: PLC0415
+
+    from sphinx.application import Sphinx  # noqa: PLC0415
+
+    src = tmp_path / "src"
+    spec_gen.generate(src)
+    (src / "conf.py").write_text('project = "spec"\nextensions = ["myst_parser"]\nmaster_doc = "index"\n')
+
+    # Capture warnings instead of asserting statuscode or relying on build() to
+    # raise: instantiating several Sphinx apps in one test process re-registers
+    # nodes and emits unrelated "node class already registered" warnings (which
+    # bump statuscode), so we assert specifically that the four C++-domain warning
+    # classes this PR fixes never appear in the build output.
+    warning_stream = io.StringIO()
+    app = Sphinx(
+        str(src),
+        str(src),
+        str(tmp_path / "out"),
+        str(tmp_path / "doctree"),
+        "html",
+        status=None,
+        warning=warning_stream,
+    )
+    app.build()
+    captured = warning_stream.getvalue()
+    for marker in (
+        "Duplicate C++ declaration",
+        "Too many template argument lists",
+        "Parsing of expression failed",
+        "recovery-expr",
+    ):
+        assert marker not in captured, f"unexpected C++ domain warning ({marker}):\n{captured}"
+
+
 def test_m7_kinds_build_as_domain_objects(m7_gen: Generator, tmp_path: Path) -> None:
     pytest.importorskip("sphinx")
     pytest.importorskip("myst_parser")
