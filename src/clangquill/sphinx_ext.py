@@ -13,17 +13,39 @@ Every knob is a ``clangquill_*`` config value mirroring a field of
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any
 
+from sphinx.errors import ExtensionError
+from sphinx.util import logging
+
 from clangquill import __version__, _core
-from clangquill.config import CONFIG_FIELDS, Config
+from clangquill.config import CONFIG_FIELDS, CONFIG_PREFIX, Config, ConfigError
 from clangquill.pipeline import build
 
 if TYPE_CHECKING:
     from sphinx.application import Sphinx
+    from sphinx.config import Config as SphinxConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _warn_unknown_config(app: Sphinx, config: SphinxConfig) -> None:  # noqa: ARG001
+    """``config-inited`` hook: flag ``clangquill_*`` names that match no option.
+
+    ``Config.from_mapping`` deliberately ignores unknown keys (so any superset
+    mapping can be passed), which means a conf.py typo like ``clangquill_inputs``
+    would otherwise vanish silently — Sphinx itself accepts any variable in
+    conf.py. Suppressible via ``suppress_warnings = ["clangquill.config"]``.
+    """
+    known = {name for name, _ in CONFIG_FIELDS}
+    for name in config._raw_config:  # noqa: SLF001 - the conf.py namespace has no public accessor
+        if name.startswith(CONFIG_PREFIX) and name not in known:
+            logger.warning(
+                "unknown config value %r — no clangquill option has that name (see clangquill.config.Config)",
+                name,
+                type="clangquill",
+                subtype="config",
+            )
 
 
 def _run(app: Sphinx) -> None:
@@ -36,11 +58,23 @@ def _run(app: Sphinx) -> None:
         # Degrade gracefully where the core was built without libclang (e.g. a
         # docs environment lacking the dev headers) rather than failing the
         # whole Sphinx build. Still write a placeholder root document so any
-        # toctree pointing at the output keeps resolving.
-        logger.warning("clangquill: core built without libclang; skipping API generation")
+        # toctree pointing at the output keeps resolving. Suppressible via
+        # ``suppress_warnings = ["clangquill.libclang"]`` (e.g. for -W builds).
+        logger.warning(
+            "core built without libclang; skipping API generation",
+            type="clangquill",
+            subtype="libclang",
+        )
         _write_placeholder(app, config)
         return
-    result = build(config, base_dir=app.srcdir)
+    try:
+        result = build(config, base_dir=app.srcdir)
+    except (ConfigError, FileNotFoundError) as exc:
+        # Anticipated user-input failures (a bad clangquill_* value, an input
+        # pattern matching nothing) become a clean build error instead of a
+        # raw traceback.
+        msg = f"clangquill: {exc}"
+        raise ExtensionError(msg) from exc
     # Remembered for the build-finished hook so a throwaway IR can be removed.
     app._clangquill_temp_db = result.db_path if result.db_is_temporary else None  # noqa: SLF001
     logger.info(
@@ -50,7 +84,7 @@ def _run(app: Sphinx) -> None:
         result.output_dir,
     )
     for diagnostic in result.diagnostics:
-        logger.warning("clangquill: %s", diagnostic)
+        logger.warning("%s", diagnostic, type="clangquill", subtype="parse")
 
 
 def _write_placeholder(app: Sphinx, config: Config) -> None:
@@ -93,6 +127,7 @@ def setup(app: Sphinx) -> dict[str, Any]:
     for name, default in CONFIG_FIELDS:
         app.add_config_value(name, default, "env")
 
+    app.connect("config-inited", _warn_unknown_config)
     app.connect("builder-inited", _run)
     app.connect("build-finished", _cleanup)
 

@@ -14,10 +14,15 @@ from enum import IntEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from clangquill import _core
 from clangquill.comments import CommentModel, CommentParser, model_from_fields, resolve_override
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+
+class StoreVersionError(RuntimeError):
+    """Raised when a database is not a clangquill IR of the supported schema."""
 
 
 class SymbolKind(IntEnum):
@@ -178,15 +183,38 @@ class Store:
     @classmethod
     @contextmanager
     def open(cls, path: str | Path) -> Iterator[Store]:
-        """Open ``path`` read-only and yield a :class:`Store`."""
+        """Open ``path`` read-only and yield a :class:`Store`.
+
+        Raises :class:`StoreVersionError` when ``path`` is not a clangquill IR
+        database or was written with an incompatible schema version, so a stale
+        artifact fails with an actionable message instead of an opaque SQL
+        error on the first query.
+        """
         # as_uri() percent-encodes spaces and special characters so paths with
         # e.g. "?" or "#" produce a valid file URI on every platform.
         uri = f"{Path(path).resolve().as_uri()}?mode=ro"
         con = sqlite3.connect(uri, uri=True)
         try:
-            yield cls(con)
+            store = cls(con)
+            store._check_schema_version(path)
+            yield store
         finally:
             con.close()
+
+    def _check_schema_version(self, path: str | Path) -> None:
+        """Reject a database whose schema does not match the linked core's."""
+        expected = str(_core.SCHEMA_VERSION)
+        try:
+            version = self.meta("schema_version")
+        except sqlite3.DatabaseError as exc:
+            msg = f"{path} is not a clangquill IR database (no readable meta table)"
+            raise StoreVersionError(msg) from exc
+        if version != expected:
+            msg = (
+                f"{path} has IR schema version {version!r} but this clangquill expects {expected!r}; "
+                "regenerate the database (re-run the parse) with this version"
+            )
+            raise StoreVersionError(msg)
 
     def meta(self, key: str) -> str | None:
         """Return a value from the ``meta`` table, or ``None``."""

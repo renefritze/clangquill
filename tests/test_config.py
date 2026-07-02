@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
+
 import pytest
 
-from clangquill.config import CONFIG_FIELDS, CONFIG_PREFIX, Config, ConfigError
+from clangquill.config import _TYPE_CHECKS, CONFIG_FIELDS, CONFIG_PREFIX, Config, ConfigError
+
+
+def test_type_checks_cover_every_field():
+    # Every Config field must have an up-front type check, so a new field
+    # cannot silently skip validation (the two lists are maintained by hand).
+    checked = {name for name, _, _ in _TYPE_CHECKS}
+    assert checked == {f.name for f in fields(Config)}
 
 
 def test_defaults_match_issue_contract():

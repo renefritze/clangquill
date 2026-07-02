@@ -61,6 +61,31 @@ def test_generate_writes_pages_and_index(gen: Generator, tmp_path: Path) -> None
     assert (out / "geo.md").read_text().startswith("# Namespace `geo`")
 
 
+def test_unique_stem_dedupes_case_insensitively() -> None:
+    # `Foo` and `foo` are the same file on macOS/Windows, so they must not
+    # share a stem.
+    seen: set[str] = set()
+    assert Generator._unique_stem("Foo", seen) == "Foo"  # noqa: SLF001
+    assert Generator._unique_stem("foo", seen) == "foo_"  # noqa: SLF001
+    assert Generator._unique_stem("FOO", seen) == "FOO__"  # noqa: SLF001
+
+
+def test_generate_avoids_root_document_and_case_collisions(collision_db: Path, tmp_path: Path) -> None:
+    out = tmp_path / "api"
+    with Store.open(collision_db) as store:
+        pages = Generator(store).generate(out)
+
+    # A symbol named `index` must not collide with the toctree root document,
+    # and `Foo`/`foo` must not collide with each other on a case-insensitive
+    # filesystem.
+    assert sorted(pages) == ["Foo", "foo_", "index_"]
+    index = (out / "index.md").read_text()
+    assert index.startswith("# API Reference")
+    assert "index_" in index
+    assert "{cpp:function} void index()" in (out / "index_.md").read_text()
+    assert "{cpp:function} void foo()" in (out / "foo_.md").read_text()
+
+
 def test_emitted_directives_cover_each_kind(gen: Generator, store: Store) -> None:
     rendered = gen.render_symbol(_symbol(store, "geo"), level=1)
     for directive in ("{cpp:class}", "{cpp:function}", "{cpp:member}", "{cpp:enum}", "{cpp:enumerator}"):

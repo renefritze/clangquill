@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from clangquill import _core
+
 _SCHEMA_HPP = Path(__file__).resolve().parents[1] / "src" / "cpp" / "store" / "schema.hpp"
 
 
@@ -33,7 +35,7 @@ def _build_fixture_db(path: Path) -> None:
     con = sqlite3.connect(path)
     try:
         con.executescript(_schema_ddl())
-        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', '1')")
+        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', ?)", (str(_core.SCHEMA_VERSION),))
         con.execute("INSERT INTO files(id, path, sha256, size_bytes) VALUES(1, 'geo.hpp', 'deadbeef', 512)")
 
         def sym(  # noqa: PLR0913
@@ -193,7 +195,7 @@ def _build_m7_db(path: Path) -> None:
     con = sqlite3.connect(path)
     try:
         con.executescript(_schema_ddl())
-        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', '2')")
+        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', ?)", (str(_core.SCHEMA_VERSION),))
         con.execute("INSERT INTO files(id, path, sha256, size_bytes) VALUES(1, 'm7.hpp', 'cafef00d', 256)")
 
         def sym(  # noqa: PLR0913
@@ -291,7 +293,7 @@ def _build_multifile_db(path: Path) -> None:
     con = sqlite3.connect(path)
     try:
         con.executescript(_schema_ddl())
-        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', '1')")
+        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', ?)", (str(_core.SCHEMA_VERSION),))
         con.execute("INSERT INTO files(id, path, sha256, size_bytes) VALUES(1, 'alpha.hpp', 'aa', 64)")
         con.execute("INSERT INTO files(id, path, sha256, size_bytes) VALUES(2, 'beta.hpp', 'bb', 64)")
 
@@ -341,7 +343,7 @@ def _build_ns_db(path: Path) -> None:
     con = sqlite3.connect(path)
     try:
         con.executescript(_schema_ddl())
-        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', '1')")
+        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', ?)", (str(_core.SCHEMA_VERSION),))
         con.execute("INSERT INTO files(id, path, sha256, size_bytes) VALUES(1, 'app.hpp', 'abc', 256)")
 
         def sym(  # noqa: PLR0913
@@ -425,7 +427,7 @@ def _build_spec_db(path: Path) -> None:
     con = sqlite3.connect(path)
     try:
         con.executescript(_schema_ddl())
-        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', '1')")
+        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', ?)", (str(_core.SCHEMA_VERSION),))
         con.execute("INSERT INTO files(id, path, sha256, size_bytes) VALUES(1, 'spec.hpp', 'spec', 256)")
 
         def sym(  # noqa: PLR0913
@@ -560,6 +562,38 @@ def _build_spec_db(path: Path) -> None:
         con.commit()
     finally:
         con.close()
+
+
+def _build_collision_db(path: Path) -> None:
+    """Populate ``path`` with symbols whose page stems collide.
+
+    ``index`` clashes with the default root document, and ``Foo``/``foo`` are
+    distinct C++ names but the same filename on a case-insensitive filesystem.
+    """
+    con = sqlite3.connect(path)
+    try:
+        con.executescript(_schema_ddl())
+        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', ?)", (str(_core.SCHEMA_VERSION),))
+        con.execute("INSERT INTO files(id, path, sha256, size_bytes) VALUES(1, 'clash.hpp', 'cc', 64)")
+        for usr, name in (("c:@F@index", "index"), ("c:@F@Foo", "Foo"), ("c:@F@foo", "foo")):
+            con.execute(
+                "INSERT INTO symbols(usr, parent_usr, kind, spelling, qualified_name, "
+                "display_name, signature, type_repr, access, is_definition, "
+                "is_documented, content_hash, file_id, line) "
+                "VALUES(?, '', 5, ?, ?, ?, ?, '', 0, 1, 1, ?, 1, 0)",
+                (usr, name, name, name, f"void {name}()", "hash-" + usr),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+
+@pytest.fixture
+def collision_db(tmp_path: Path) -> Path:
+    """Return an IR database whose symbols produce colliding page stems."""
+    path = tmp_path / "collision.sqlite"
+    _build_collision_db(path)
+    return path
 
 
 @pytest.fixture

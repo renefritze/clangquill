@@ -37,8 +37,11 @@ if TYPE_CHECKING:
 # adds the ``tu_inputs`` table so the cache can attribute each tracked file to
 # the input(s) that #include it, enabling per-TU incremental re-parses; v4 adds
 # the ``page_cache`` table that memoises rendered page text by a dependency key,
-# so an incremental build re-renders only the pages whose symbols changed.
-CACHE_VERSION = 4
+# so an incremental build re-renders only the pages whose symbols changed; v5
+# adds the ``(mtime_ns, size_bytes)`` fast-path columns on ``outputs`` so a
+# build can cheaply verify the pages it wrote are still intact on disk (and
+# restore any that were deleted or hand-edited).
+CACHE_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -69,10 +72,16 @@ CREATE TABLE IF NOT EXISTS tu_inputs (
 );
 CREATE INDEX IF NOT EXISTS idx_tu_inputs_dep ON tu_inputs(dep_path);
 
--- Every page the last render wrote, with the hash of its rendered content.
+-- Every page the last render wrote, with the hash of its rendered content and
+-- the (mtime_ns, size_bytes) the file had after writing. The metadata is the
+-- fast-path used to verify an output is still intact on disk without re-reading
+-- it (mirroring the ``inputs`` fast-path); NULL metadata always takes the hash
+-- path.
 CREATE TABLE IF NOT EXISTS outputs (
   output_path  TEXT PRIMARY KEY,
-  content_hash TEXT NOT NULL
+  content_hash TEXT NOT NULL,
+  mtime_ns     INTEGER,
+  size_bytes   INTEGER
 );
 
 -- Memoised render output: the rendered text of every page from the last render,
@@ -125,6 +134,21 @@ def fingerprint(payload: Mapping[str, object]) -> str:
     """
     blob = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hash_text(blob)
+
+
+@dataclass(frozen=True)
+class OutputRecord:
+    """One row of the ``outputs`` table: what a written page looked like.
+
+    ``content_hash`` is the SHA-256 of the rendered text; ``mtime_ns`` and
+    ``size_bytes`` are the file's stat after writing, used as a fast-path to
+    verify the page is still intact on disk without re-reading it. ``None``
+    metadata (a file that could not be stat'd) always takes the hash path.
+    """
+
+    content_hash: str
+    mtime_ns: int | None = None
+    size_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -453,19 +477,32 @@ class BuildCache:
 
     # -- output bookkeeping ---------------------------------------------------
 
-    def outputs(self) -> dict[str, str]:
-        """Return ``{output_path: content_hash}`` from the last render."""
+    def outputs(self) -> dict[str, OutputRecord]:
+        """Return ``{output_path: OutputRecord}`` from the last render."""
         return {
-            row["output_path"]: row["content_hash"]
-            for row in self._con.execute("SELECT output_path, content_hash FROM outputs")
+            row["output_path"]: OutputRecord(row["content_hash"], row["mtime_ns"], row["size_bytes"])
+            for row in self._con.execute("SELECT output_path, content_hash, mtime_ns, size_bytes FROM outputs")
         }
 
-    def record_outputs(self, outputs: Mapping[str, str]) -> None:
-        """Replace the stored output index with ``{output_path: content_hash}``."""
+    def record_outputs(self, outputs: Mapping[str, OutputRecord]) -> None:
+        """Replace the stored output index with ``{output_path: OutputRecord}``."""
         self._con.execute("DELETE FROM outputs")
         self._con.executemany(
-            "INSERT OR REPLACE INTO outputs(output_path, content_hash) VALUES(?, ?)",
-            list(outputs.items()),
+            "INSERT OR REPLACE INTO outputs(output_path, content_hash, mtime_ns, size_bytes) VALUES(?, ?, ?, ?)",
+            [(name, rec.content_hash, rec.mtime_ns, rec.size_bytes) for name, rec in outputs.items()],
+        )
+        self._con.commit()
+
+    def refresh_output_stats(self, stats: Mapping[str, tuple[int, int]]) -> None:
+        """Heal the ``(mtime_ns, size_bytes)`` fast-path of touched-but-identical outputs.
+
+        Mirrors the healing :meth:`_scan_inputs` does for inputs: a page whose
+        stat moved but whose content still matches pays the hash read once, not
+        on every later build.
+        """
+        self._con.executemany(
+            "UPDATE outputs SET mtime_ns = ?, size_bytes = ? WHERE output_path = ?",
+            [(mtime_ns, size, name) for name, (mtime_ns, size) in stats.items()],
         )
         self._con.commit()
 
@@ -502,6 +539,7 @@ class BuildCache:
 __all__ = [
     "CACHE_VERSION",
     "BuildCache",
+    "OutputRecord",
     "ParseStatus",
     "file_sha256",
     "fingerprint",

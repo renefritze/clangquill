@@ -105,6 +105,60 @@ def test_minimal_sphinx_project_builds(tmp_path: Path) -> None:
     assert "_CPPv4N3geo6CircleE" in html
 
 
+def test_typoed_config_value_is_flagged(tmp_path: Path) -> None:
+    """A misspelled ``clangquill_*`` name must warn instead of vanishing silently."""
+    pytest.importorskip("sphinx")
+    pytest.importorskip("myst_parser")
+    from sphinx.application import Sphinx  # noqa: PLC0415
+
+    src = tmp_path / "src"
+    src.mkdir()
+    # ``clangquill_inputs`` (plural) is not a recognised option.
+    (src / "conf.py").write_text(
+        'extensions = ["clangquill.sphinx_ext"]\nmaster_doc = "index"\nclangquill_inputs = ["geo.hpp"]\n',
+    )
+    (src / "index.md").write_text("# Project\n")
+
+    warnings = tmp_path / "warnings.txt"
+    app = Sphinx(
+        str(src),
+        str(src),
+        str(tmp_path / "out"),
+        str(tmp_path / "doctree"),
+        "html",
+        status=None,
+        warning=warnings.open("w", encoding="utf-8"),
+    )
+    app.build()
+    assert "unknown config value 'clangquill_inputs'" in warnings.read_text()
+
+
+def test_missing_input_raises_a_clean_extension_error(tmp_path: Path) -> None:
+    """An input pattern matching nothing must fail with an actionable message."""
+    pytest.importorskip("sphinx")
+    pytest.importorskip("myst_parser")
+    from sphinx.application import Sphinx  # noqa: PLC0415
+    from sphinx.errors import ExtensionError  # noqa: PLC0415
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "conf.py").write_text(
+        'extensions = ["clangquill.sphinx_ext"]\nmaster_doc = "index"\nclangquill_input = ["missing_*.hpp"]\n',
+    )
+    (src / "index.md").write_text("# Project\n")
+
+    with pytest.raises(ExtensionError, match="clangquill input matched no files"):
+        Sphinx(
+            str(src),
+            str(src),
+            str(tmp_path / "out"),
+            str(tmp_path / "doctree"),
+            "html",
+            status=None,
+            warning=(tmp_path / "warnings.txt").open("w", encoding="utf-8"),
+        )
+
+
 def test_coexists_with_a_preconfigured_myst_parser(tmp_path: Path) -> None:
     """A pre-configured MyST parser must not be double-registered.
 

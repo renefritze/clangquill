@@ -804,7 +804,7 @@ class Generator:
         template = self.env.get_template("member-page.md.jinja")
         return _normalize(template.render(title=title, symbols=members, level=level))
 
-    def render_pages(self, *, group_by: str = "symbol") -> list[RenderedPage]:
+    def render_pages(self, *, group_by: str = "symbol", reserved_stems: Sequence[str] = ()) -> list[RenderedPage]:
         r"""Render every page in memory without writing, in toctree order.
 
         ``group_by`` selects the page partitioning: ``"symbol"`` yields one page
@@ -815,16 +815,18 @@ class Generator:
         pages; see :meth:`_plan_namespace_pages`). Pages for any
         Doxygen ``\defgroup`` groups are appended after the symbol/file/class
         pages; when there are no groups nothing is appended, so output for
-        group-free projects is unchanged. The caller decides how (and whether)
+        group-free projects is unchanged. ``reserved_stems`` names page stems the
+        caller will write itself (the toctree index), so no symbol page can
+        collide with them. The caller decides how (and whether)
         to persist each :class:`RenderedPage`, which is what lets the
         incremental pipeline skip unchanged outputs.
         """
         return [
             RenderedPage(plan.stem, plan.label, plan.render(), top_level=plan.top_level)
-            for plan in self.plan_pages(group_by=group_by)
+            for plan in self.plan_pages(group_by=group_by, reserved_stems=reserved_stems)
         ]
 
-    def plan_pages(self, *, group_by: str = "symbol") -> list[PagePlan]:
+    def plan_pages(self, *, group_by: str = "symbol", reserved_stems: Sequence[str] = ()) -> list[PagePlan]:
         r"""Plan every page (stem, label, render thunk, dependencies) in order.
 
         This is the page set :meth:`render_pages` materialises, but without
@@ -832,16 +834,22 @@ class Generator:
         callable and the symbols it reads. The incremental pipeline plans first,
         keys each page via :meth:`page_fingerprint`, and only calls ``render``
         for pages whose key changed — replaying cached text for the rest.
+
+        ``reserved_stems`` are excluded from the planned stems (a symbol named
+        ``index`` must not collide with the root document the caller writes).
+        One ``seen`` set spans the symbol/file/class/namespace pages *and* the
+        group pages, so no two planned pages can ever share a filename.
         """
+        seen = {stem.casefold() for stem in reserved_stems}
         if group_by == "file":
-            plans = self._plan_file_pages()
+            plans = self._plan_file_pages(seen)
         elif group_by == "class":
-            plans = self._plan_class_pages()
+            plans = self._plan_class_pages(seen)
         elif group_by == "namespace":
-            plans = self._plan_namespace_pages()
+            plans = self._plan_namespace_pages(seen)
         else:
-            plans = self._plan_symbol_pages()
-        return plans + self._plan_group_pages()
+            plans = self._plan_symbol_pages(seen)
+        return plans + self._plan_group_pages(seen)
 
     def render_index(
         self,
@@ -881,7 +889,7 @@ class Generator:
         """
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
-        pages = self.render_pages(group_by=group_by)
+        pages = self.render_pages(group_by=group_by, reserved_stems=(root_document,))
         for page in pages:
             (out / f"{page.stem}.md").write_text(page.text, encoding="utf-8")
         (out / f"{root_document}.md").write_text(
@@ -890,17 +898,16 @@ class Generator:
         )
         return [page.stem for page in pages]
 
-    def _plan_symbol_pages(self) -> list[PagePlan]:
+    def _plan_symbol_pages(self, seen: set[str]) -> list[PagePlan]:
         """Plan one page per visible root symbol."""
         plans: list[PagePlan] = []
-        seen: set[str] = set()
         for root in self.roots():
             stem = self._unique_stem(_slug(root.qualified_name or root.spelling), seen)
             label = root.qualified_name or root.spelling
             plans.append(PagePlan(stem, label, partial(self.render_symbol, root), subtree_seeds=(root,)))
         return plans
 
-    def _plan_file_pages(self) -> list[PagePlan]:
+    def _plan_file_pages(self, seen: set[str]) -> list[PagePlan]:
         """Plan one page per parsed source file that declares any symbol.
 
         A file qualifies on its :meth:`file_roots` (the symbols physically
@@ -909,7 +916,6 @@ class Generator:
         vanish, since only global roots used to count.
         """
         plans: list[PagePlan] = []
-        seen: set[str] = set()
         for source_file in self.store.files():
             roots = self.file_roots(source_file.id)
             if not roots:
@@ -929,7 +935,7 @@ class Generator:
             )
         return plans
 
-    def _plan_class_pages(self) -> list[PagePlan]:
+    def _plan_class_pages(self, seen: set[str]) -> list[PagePlan]:
         """Plan one page per documented class, splitting big namespace pages.
 
         Where :meth:`_plan_symbol_pages` emits a single page per root symbol —
@@ -941,7 +947,6 @@ class Generator:
         nested types stay on the record's own page.
         """
         plans: list[PagePlan] = []
-        seen: set[str] = set()
         for root in self.roots():
             self._emit_class_plans(root, plans, seen)
         return plans
@@ -979,7 +984,7 @@ class Generator:
             if child.kind in _CONTAINER_KINDS:
                 self._emit_class_plans(child, plans, seen)
 
-    def _plan_namespace_pages(self) -> list[PagePlan]:
+    def _plan_namespace_pages(self, seen: set[str]) -> list[PagePlan]:
         r"""Plan a browsable hierarchy: index → namespaces → per-symbol pages.
 
         Where :meth:`_plan_class_pages` still lists *every* class and namespace
@@ -992,7 +997,6 @@ class Generator:
         therefore becomes a navigable namespace hierarchy.
         """
         plans: list[PagePlan] = []
-        seen: set[str] = set()
         # The global scope is the root index itself, so its direct entries (the
         # top namespaces and any global free symbols) are the top-level pages.
         self._emit_namespace_scope(None, self.roots(), plans, seen, top_level=True)
@@ -1173,7 +1177,7 @@ class Generator:
         )
         entries.append((stem, label))
 
-    def _plan_group_pages(self) -> list[PagePlan]:
+    def _plan_group_pages(self, seen: set[str]) -> list[PagePlan]:
         """Plan one page per documentation group, top-level groups first.
 
         Returns an empty list when the IR defines no groups, leaving output for
@@ -1183,7 +1187,6 @@ class Generator:
         if not groups:
             return []
         plans: list[PagePlan] = []
-        seen: set[str] = set()
         # Top-level groups first, then nested ones, for a stable toctree order.
         ordered = self.store.root_groups()
         ordered_ids = {g.id for g in ordered}
@@ -1287,10 +1290,16 @@ class Generator:
 
     @staticmethod
     def _unique_stem(stem: str, seen: set[str]) -> str:
-        """Disambiguate ``stem`` against ``seen``, recording the result."""
-        while stem in seen:
+        """Disambiguate ``stem`` against ``seen``, recording the result.
+
+        ``seen`` holds casefolded stems and the comparison is case-insensitive:
+        ``Foo`` and ``foo`` are distinct names but the same file on a
+        case-insensitive filesystem (macOS/Windows), so they must not share a
+        stem or the second page silently overwrites the first.
+        """
+        while stem.casefold() in seen:
             stem += "_"
-        seen.add(stem)
+        seen.add(stem.casefold())
         return stem
 
 
