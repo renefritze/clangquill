@@ -69,6 +69,18 @@ def _root(
     """
 
 
+def _parse_template_overrides(pairs: list[str]) -> dict[str, str]:
+    """Turn repeated ``--template KIND=STEM`` options into the ``templates`` mapping."""
+    overrides: dict[str, str] = {}
+    for pair in pairs:
+        kind, sep, stem = pair.partition("=")
+        if not sep or not kind or not stem:
+            msg = f"--template expects KIND=STEM (e.g. class=my_class), got {pair!r}"
+            raise typer.BadParameter(msg)
+        overrides[kind] = stem
+    return overrides
+
+
 @app.command("build")
 def build(  # noqa: PLR0913
     inputs: Annotated[list[Path], typer.Argument(help="C++ headers/sources (paths or globs) to parse.")],
@@ -100,6 +112,10 @@ def build(  # noqa: PLR0913
         list[Path] | None,
         typer.Option("--template-dir", help="Directory searched before bundled templates."),
     ] = None,
+    template: Annotated[
+        list[str] | None,
+        typer.Option("--template", help="Per-kind template override as KIND=STEM (repeatable)."),
+    ] = None,
     cache_dir: Annotated[
         Path | None,
         typer.Option("--cache-dir", help="Keep the SQLite IR here instead of a temp file."),
@@ -117,6 +133,14 @@ def build(  # noqa: PLR0913
         typer.Option("--group-by", help=_GROUP_BY_HELP),
     ] = "symbol",
     toctree_maxdepth: Annotated[int, typer.Option("--toctree-maxdepth", help="Generated toctree depth.")] = 2,
+    root_document: Annotated[
+        str,
+        typer.Option("--root-document", help="Stem of the generated index/toctree page."),
+    ] = "index",
+    path_base: Annotated[
+        Path | None,
+        typer.Option("--path-base", help="Directory rendered file paths are shown relative to."),
+    ] = None,
     jobs: Annotated[
         int,
         typer.Option("--jobs", "-j", help="Parse threads (0 = auto-detect CPU count, 1 = serial)."),
@@ -137,11 +161,14 @@ def build(  # noqa: PLR0913
         clang_resource_dir=str(clang_resource_dir) if clang_resource_dir else None,
         output_dir=str(output_dir),
         template_dirs=[str(p) for p in template_dir or []],
+        templates=_parse_template_overrides(template or []),
         cache_dir=str(cache_dir) if cache_dir else None,
         include_undocumented=include_undocumented,
         comment_parser=comment_parser,
         group_by=group_by,
         toctree_maxdepth=toctree_maxdepth,
+        root_document=root_document,
+        path_base=str(path_base) if path_base else None,
         jobs=jobs,
         tu_batch=tu_batch,
     )

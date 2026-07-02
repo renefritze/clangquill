@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import TYPE_CHECKING
 
 import pytest
 
 from clangquill import _core
-from clangquill.store import Store, SymbolKind
+from clangquill.store import Store, StoreVersionError, SymbolKind
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -257,3 +258,33 @@ def test_batched_parse_matches_per_file_parse(tmp_path: Path) -> None:
 def test_schema_version_exposed() -> None:
     assert isinstance(_core.SCHEMA_VERSION, int)
     assert _core.SCHEMA_VERSION >= 1
+
+
+def test_store_open_rejects_incompatible_schema_version(tmp_path: Path) -> None:
+    db = tmp_path / "old.sqlite"
+    con = sqlite3.connect(db)
+    con.executescript("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+    con.execute("INSERT INTO meta(key, value) VALUES('schema_version', '0')")
+    con.commit()
+    con.close()
+
+    with pytest.raises(StoreVersionError, match="schema version '0'"), Store.open(db):
+        pass
+
+
+def test_store_open_rejects_a_missing_path(tmp_path: Path) -> None:
+    # mode=ro would fail at connect() with an unhelpful OperationalError; the
+    # pre-check names the path instead.
+    with pytest.raises(FileNotFoundError, match=r"nope\.sqlite"), Store.open(tmp_path / "nope.sqlite"):
+        pass
+
+
+def test_store_open_rejects_a_non_ir_database(tmp_path: Path) -> None:
+    db = tmp_path / "other.sqlite"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE unrelated (x INTEGER)")
+    con.commit()
+    con.close()
+
+    with pytest.raises(StoreVersionError, match="not a clangquill IR database"), Store.open(db):
+        pass

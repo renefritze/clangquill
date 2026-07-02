@@ -161,6 +161,55 @@ def test_incremental_noop_skips_rendering(project: Path, monkeypatch: pytest.Mon
 
 
 @requires_libclang
+def test_incremental_restores_deleted_output(project: Path) -> None:
+    config = Config(input=["demo.hpp"], output_dir="api", cache_dir=".cache")
+    first = build(config, base_dir=project)
+    page = project / "api" / "demo.md"
+    original = page.read_text()
+
+    # A deleted page (e.g. `git clean` of the output dir) must not be trusted by
+    # the noop shortcut: the next build rewrites exactly the missing page.
+    page.unlink()
+    second = build(config, base_dir=project)
+    assert not second.parsed
+    assert second.pages_written == ["demo.md"]
+    assert page.read_text() == original
+    assert second.pages == first.pages
+
+    # And once repaired, the build noops again.
+    third = build(config, base_dir=project)
+    assert third.pages_written == []
+
+
+@requires_libclang
+def test_incremental_restores_hand_edited_output(project: Path) -> None:
+    config = Config(input=["demo.hpp"], output_dir="api", cache_dir=".cache")
+    build(config, base_dir=project)
+    page = project / "api" / "demo.md"
+    original = page.read_text()
+
+    # A hand-edited generated page is restored, not silently left stale.
+    page.write_text("# tampered\n", encoding="utf-8")
+    result = build(config, base_dir=project)
+    assert result.pages_written == ["demo.md"]
+    assert page.read_text() == original
+
+
+@requires_libclang
+def test_incremental_touched_but_identical_output_still_noops(project: Path) -> None:
+    config = Config(input=["demo.hpp"], output_dir="api", cache_dir=".cache")
+    build(config, base_dir=project)
+    page = project / "api" / "demo.md"
+
+    # Rewriting identical bytes moves the stat but not the content: the build
+    # must recognise the page as intact (via the hash fallback) and still noop.
+    page.write_text(page.read_text(), encoding="utf-8")
+    result = build(config, base_dir=project)
+    assert not result.parsed
+    assert result.pages_written == []
+
+
+@requires_libclang
 def test_incremental_render_config_change_rerenders_without_reparse(project: Path) -> None:
     config = Config(input=["demo.hpp"], output_dir="api", cache_dir=".cache")
     build(config, base_dir=project)
@@ -553,6 +602,44 @@ def test_cli_build_from_cwd(project: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert result.exit_code == 0, result.output
     assert (project / "out" / "demo.md").is_file()
     assert "Wrote 1 page(s)" in result.output
+
+
+@requires_libclang
+def test_cli_build_root_document_path_base_and_template(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (project / "templates").mkdir()
+    (project / "templates" / "my_ns.md.jinja").write_text("# OVERRIDE {{ symbol.qualified_name }}\n")
+    monkeypatch.chdir(project)
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.app,
+        [
+            "build",
+            "demo.hpp",
+            "-o",
+            "out",
+            "--root-document",
+            "api_root",
+            "--path-base",
+            ".",
+            "--template-dir",
+            "templates",
+            "--template",
+            "namespace=my_ns",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert (project / "out" / "api_root.md").is_file()
+    assert not (project / "out" / "index.md").exists()
+    assert "OVERRIDE demo" in (project / "out" / "demo.md").read_text()
+
+
+def test_cli_build_rejects_malformed_template_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "demo.hpp").write_text("/// ns\nnamespace demo {}\n")
+    runner = CliRunner()
+    result = runner.invoke(cli.app, ["build", "demo.hpp", "--template", "no-equals-sign"])
+    assert result.exit_code != 0
+    assert "KIND=STEM" in result.output
 
 
 def test_cli_build_missing_input_exits_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

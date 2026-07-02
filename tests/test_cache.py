@@ -7,7 +7,15 @@ import sqlite3
 from typing import TYPE_CHECKING
 
 import clangquill.cache as cache_module
-from clangquill.cache import CACHE_VERSION, BuildCache, ParseStatus, file_sha256, fingerprint, hash_text
+from clangquill.cache import (
+    CACHE_VERSION,
+    BuildCache,
+    OutputRecord,
+    ParseStatus,
+    file_sha256,
+    fingerprint,
+    hash_text,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -174,13 +182,16 @@ def test_record_partial_parse_updates_map_and_prunes_orphans(tmp_path: Path) -> 
 def test_outputs_round_trip_and_replacement(tmp_path: Path) -> None:
     cache_dir = tmp_path / "cache"
     with BuildCache.open(cache_dir) as cache:
-        cache.record_outputs({"a.md": "h1", "b.md": "h2"})
+        cache.record_outputs({"a.md": OutputRecord("h1", 1, 10), "b.md": OutputRecord("h2", 2, 20)})
     # State persists across open()s.
     with BuildCache.open(cache_dir) as cache:
-        assert cache.outputs() == {"a.md": "h1", "b.md": "h2"}
+        assert cache.outputs() == {"a.md": OutputRecord("h1", 1, 10), "b.md": OutputRecord("h2", 2, 20)}
         # record_outputs replaces the whole index rather than merging.
-        cache.record_outputs({"a.md": "h1b"})
-        assert cache.outputs() == {"a.md": "h1b"}
+        cache.record_outputs({"a.md": OutputRecord("h1b")})
+        assert cache.outputs() == {"a.md": OutputRecord("h1b", None, None)}
+        # refresh_output_stats heals just the stat fast-path, not the hash.
+        cache.refresh_output_stats({"a.md": (3, 30)})
+        assert cache.outputs() == {"a.md": OutputRecord("h1b", 3, 30)}
 
 
 def test_render_round_trip_and_currency(tmp_path: Path) -> None:
@@ -240,9 +251,9 @@ def test_corrupted_cache_is_discarded_and_rebuilt(tmp_path: Path) -> None:
     (cache_dir / BuildCache.FILENAME).write_bytes(b"not a sqlite database at all")
     with BuildCache.open(cache_dir) as cache:
         assert cache.outputs() == {}
-        cache.record_outputs({"a.md": "h1"})
+        cache.record_outputs({"a.md": OutputRecord("h1")})
     with BuildCache.open(cache_dir) as cache:
-        assert cache.outputs() == {"a.md": "h1"}
+        assert cache.outputs() == {"a.md": OutputRecord("h1")}
 
 
 def _write_v1_cache(cache_dir: Path) -> Path:
@@ -286,7 +297,7 @@ def test_v1_cache_is_migrated_to_current_schema(tmp_path: Path) -> None:
 def test_version_mismatch_resets_cache(tmp_path: Path) -> None:
     cache_dir = tmp_path / "cache"
     with BuildCache.open(cache_dir) as cache:
-        cache.record_outputs({"a.md": "h1"})
+        cache.record_outputs({"a.md": OutputRecord("h1")})
         cache._set_meta("cache_version", str(CACHE_VERSION + 1))  # noqa: SLF001
         cache._con.commit()  # noqa: SLF001
     # Re-opening sees an incompatible version and starts from scratch.

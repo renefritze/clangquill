@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clangquill import _core
-from clangquill.cache import BuildCache, ParseStatus, file_sha256, fingerprint, hash_text
+from clangquill.cache import BuildCache, OutputRecord, ParseStatus, file_sha256, fingerprint, hash_text
 from clangquill.generator import Generator
 from clangquill.store import Store
 
@@ -258,7 +258,9 @@ def _rendered_files(
     cache when unchanged, so an incremental build re-runs Jinja only for the
     pages whose symbols actually moved. Without a cache it renders everything.
     """
-    plans = generator.plan_pages(group_by=config.group_by)
+    # The index stem is reserved so no symbol page (e.g. a function named
+    # ``index``) can collide with the root document appended below.
+    plans = generator.plan_pages(group_by=config.group_by, reserved_stems=(config.root_document,))
     memoize = cache is not None and _page_cache_eligible(config)
     rendered: list[tuple[str, str]] = []
     records: dict[str, tuple[str, str]] = {}
@@ -377,8 +379,11 @@ def _incremental_build(
         # Fully unchanged build: the parse came from cache (IR identical) and the
         # render config/templates are unchanged, so the output the last run wrote
         # is already on disk. Skip the store open and every Jinja render — the
-        # dominant cost of a noop build — and replay the cached summary.
-        if not parsed and cache.render_is_current(render_fp):
+        # dominant cost of a noop build — and replay the cached summary. The
+        # outputs are verified first: a page deleted or edited since the last run
+        # (e.g. a `git clean` of the output dir) falls through to the render,
+        # which rewrites exactly the pages that no longer match.
+        if not parsed and cache.render_is_current(render_fp) and _outputs_intact(output_dir, cache):
             return _noop_result(output_dir, ir_path, cache.render_summary())
 
         counts: _core.ParseResult | None = None
@@ -515,6 +520,65 @@ def _parse_tus_into(
     return _tu_deps(result), list(result.diagnostics)
 
 
+def _stat_pair(path: Path) -> tuple[int | None, int | None]:
+    """Return ``(st_mtime_ns, st_size)`` for ``path``, or ``(None, None)``."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None, None
+    return stat.st_mtime_ns, stat.st_size
+
+
+def _output_intact(target: Path, record: OutputRecord) -> bool:
+    """Whether ``target`` still holds the content ``record`` describes.
+
+    Checked with the same ``(mtime_ns, size_bytes)`` fast-path the input scan
+    uses: an unchanged stat is trusted without reading the file; a moved stat
+    falls back to hashing the content, so a touched-but-identical page is still
+    recognised as intact. A missing or unreadable file is not intact.
+    """
+    try:
+        stat = target.stat()
+    except OSError:
+        return False
+    if (
+        record.mtime_ns is not None
+        and record.size_bytes is not None
+        and stat.st_mtime_ns == record.mtime_ns
+        and stat.st_size == record.size_bytes
+    ):
+        return True
+    try:
+        return file_sha256(target) == record.content_hash
+    except OSError:
+        return False
+
+
+def _outputs_intact(output_dir: Path, cache: BuildCache) -> bool:
+    """Whether every page of the last render is still intact on disk.
+
+    Gates the noop shortcut: replaying the cached summary is only sound while
+    the pages it describes actually exist with the content that was written.
+    Touched-but-identical pages have their stat fast-path healed so the hash
+    read is paid once, not on every later noop build. An empty output index is
+    never intact — there is always at least the root document.
+    """
+    records = cache.outputs()
+    if not records:
+        return False
+    healed: dict[str, tuple[int, int]] = {}
+    for name, record in records.items():
+        target = output_dir / name
+        if not _output_intact(target, record):
+            return False
+        mtime_ns, size = _stat_pair(target)
+        if mtime_ns is not None and size is not None and (mtime_ns, size) != (record.mtime_ns, record.size_bytes):
+            healed[name] = (mtime_ns, size)
+    if healed:
+        cache.refresh_output_stats(healed)
+    return True
+
+
 def _apply_outputs(
     output_dir: Path,
     rendered: list[tuple[str, str]],
@@ -522,21 +586,23 @@ def _apply_outputs(
 ) -> tuple[list[str], list[str]]:
     """Write changed pages, delete vanished ones, and refresh the cache index.
 
-    Returns ``(written, deleted)`` filenames. A page is rewritten only when its
-    content hash differs from the cached one (or the file is missing on disk),
-    so an unchanged build leaves every page untouched.
+    Returns ``(written, deleted)`` filenames. A page is rewritten when its
+    content hash differs from the cached one *or* the file on disk no longer
+    matches what was written (deleted or hand-edited), so an unchanged build
+    leaves every page untouched while a damaged output dir is repaired.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     previous = cache.outputs()
-    new_index: dict[str, str] = {}
+    new_index: dict[str, OutputRecord] = {}
     written: list[str] = []
     for name, text in rendered:
         content_hash = hash_text(text)
-        new_index[name] = content_hash
         target = output_dir / name
-        if previous.get(name) != content_hash or not target.exists():
+        prev = previous.get(name)
+        if prev is None or prev.content_hash != content_hash or not _output_intact(target, prev):
             target.write_text(text, encoding="utf-8")
             written.append(name)
+        new_index[name] = OutputRecord(content_hash, *_stat_pair(target))
 
     deleted: list[str] = []
     for name in previous:
