@@ -159,6 +159,34 @@ def test_missing_input_raises_a_clean_extension_error(tmp_path: Path) -> None:
         )
 
 
+def test_invalid_config_value_raises_a_clean_extension_error(tmp_path: Path) -> None:
+    """A ConfigError from validation converts to ExtensionError like FileNotFoundError does."""
+    pytest.importorskip("sphinx")
+    pytest.importorskip("myst_parser")
+    from sphinx.application import Sphinx  # noqa: PLC0415
+    from sphinx.errors import ExtensionError  # noqa: PLC0415
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "geo.hpp").write_text(HEADER)
+    (src / "conf.py").write_text(
+        'extensions = ["clangquill.sphinx_ext"]\nmaster_doc = "index"\n'
+        'clangquill_input = ["geo.hpp"]\nclangquill_group_by = "nonsense"\n',
+    )
+    (src / "index.md").write_text(ROOT_INDEX)
+
+    with pytest.raises(ExtensionError, match="clangquill_group_by must be one of"):
+        Sphinx(
+            str(src),
+            str(src),
+            str(tmp_path / "out"),
+            str(tmp_path / "doctree"),
+            "html",
+            status=None,
+            warning=(tmp_path / "warnings.txt").open("w", encoding="utf-8"),
+        )
+
+
 def test_coexists_with_a_preconfigured_myst_parser(tmp_path: Path) -> None:
     """A pre-configured MyST parser must not be double-registered.
 

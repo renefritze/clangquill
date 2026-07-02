@@ -86,6 +86,17 @@ def test_generate_avoids_root_document_and_case_collisions(collision_db: Path, t
     assert "{cpp:function} void foo()" in (out / "foo_.md").read_text()
 
 
+def test_group_stem_matches_planned_stem_after_dedup(m7_db: Path) -> None:
+    # Force the group's natural slug to collide so its planned stem is suffixed;
+    # group_stem() (which templates use for subgroup links) must follow suit.
+    with Store.open(m7_db) as store:
+        gen = Generator(store)
+        plans = gen.plan_pages(reserved_stems=("group_grp",))
+        group_plan = next(p for p in plans if p.group is not None)
+        assert group_plan.stem == "group_grp_"
+        assert gen.group_stem(group_plan.group) == "group_grp_"
+
+
 def test_emitted_directives_cover_each_kind(gen: Generator, store: Store) -> None:
     rendered = gen.render_symbol(_symbol(store, "geo"), level=1)
     for directive in ("{cpp:class}", "{cpp:function}", "{cpp:member}", "{cpp:enum}", "{cpp:enumerator}"):

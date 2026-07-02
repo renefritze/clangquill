@@ -185,14 +185,21 @@ class Store:
     def open(cls, path: str | Path) -> Iterator[Store]:
         """Open ``path`` read-only and yield a :class:`Store`.
 
-        Raises :class:`StoreVersionError` when ``path`` is not a clangquill IR
-        database or was written with an incompatible schema version, so a stale
-        artifact fails with an actionable message instead of an opaque SQL
-        error on the first query.
+        Raises :class:`FileNotFoundError` when ``path`` does not name a file,
+        and :class:`StoreVersionError` when it is not a clangquill IR database
+        or was written with an incompatible schema version — so a stale or
+        mistyped artifact fails with an actionable message instead of an opaque
+        SQL error at connect time or on the first query.
         """
+        resolved = Path(path).resolve()
+        if not resolved.is_file():
+            # ``mode=ro`` makes sqlite3.connect fail on a missing file, but with
+            # an unhelpful "unable to open database file"; name the path instead.
+            msg = f"no clangquill IR database at {path}"
+            raise FileNotFoundError(msg)
         # as_uri() percent-encodes spaces and special characters so paths with
         # e.g. "?" or "#" produce a valid file URI on every platform.
-        uri = f"{Path(path).resolve().as_uri()}?mode=ro"
+        uri = f"{resolved.as_uri()}?mode=ro"
         con = sqlite3.connect(uri, uri=True)
         try:
             store = cls(con)

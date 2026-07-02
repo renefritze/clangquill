@@ -272,6 +272,13 @@ def test_store_open_rejects_incompatible_schema_version(tmp_path: Path) -> None:
         pass
 
 
+def test_store_open_rejects_a_missing_path(tmp_path: Path) -> None:
+    # mode=ro would fail at connect() with an unhelpful OperationalError; the
+    # pre-check names the path instead.
+    with pytest.raises(FileNotFoundError, match=r"nope\.sqlite"), Store.open(tmp_path / "nope.sqlite"):
+        pass
+
+
 def test_store_open_rejects_a_non_ir_database(tmp_path: Path) -> None:
     db = tmp_path / "other.sqlite"
     con = sqlite3.connect(db)

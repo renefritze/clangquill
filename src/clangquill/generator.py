@@ -346,6 +346,10 @@ class Generator:
         # twice (the page gate and the render), and the result is stable for a
         # given store.
         self._file_roots_cache: dict[int, list[Symbol]] = {}
+        # The stem each group page was actually planned under (see
+        # :meth:`group_stem`): dedup can suffix the natural slug, and the
+        # subgroup links templates render must point at the planned page.
+        self._group_stems: dict[str, str] = {}
         loaders: list[FileSystemLoader | PackageLoader] = []
         if template_dirs:
             loaders.append(FileSystemLoader([str(d) for d in template_dirs]))
@@ -456,10 +460,18 @@ class Generator:
         """Return the groups nested directly under ``group``."""
         return self.store.subgroups(group.id)
 
-    @staticmethod
-    def group_stem(group: Group) -> str:
-        """Return the page stem used for ``group`` (matches :meth:`_plan_group_pages`)."""
-        return _slug(f"group_{group.id}")
+    def group_stem(self, group: Group) -> str:
+        """Return the page stem used for ``group``.
+
+        Prefers the stem :meth:`_plan_group_pages` actually assigned (which may
+        carry a dedup suffix when the natural slug collided with another page),
+        so the subgroup links ``group.md.jinja`` renders always match the page
+        that was planned. Falls back to the natural slug when the group pages
+        have not been planned by this generator (e.g. a bare
+        :meth:`render_group` call).
+        """
+        stem = self._group_stems.get(group.id)
+        return stem if stem is not None else _slug(f"group_{group.id}")
 
     def comment(self, symbol: Symbol) -> CommentModel | None:
         """Return the structured comment for ``symbol``, or ``None``."""
@@ -1193,6 +1205,7 @@ class Generator:
         ordered += [g for g in groups if g.id not in ordered_ids]
         for group in ordered:
             stem = self._unique_stem(_slug(f"group_{group.id}"), seen)
+            self._group_stems[group.id] = stem
             plans.append(PagePlan(stem, group.title or group.id, partial(self.render_group, group), group=group))
         return plans
 
@@ -1282,7 +1295,11 @@ class Generator:
     def _collect_group_tokens(self, group: Group, tokens: list[str]) -> None:
         """Append the dependency tokens a group page reads (heading, members, subgroups)."""
         tokens.append(_DEP_FIELD_SEP.join(("G", group.id, group.title, group.brief, group.detail)))
-        tokens.extend(f"GS{_DEP_FIELD_SEP}{sub.id}" for sub in self.subgroups(group))
+        # The rendered subgroup links carry the *planned* stem (which dedup may
+        # suffix), so the stem is part of what this page reads.
+        tokens.extend(
+            f"GS{_DEP_FIELD_SEP}{sub.id}{_DEP_FIELD_SEP}{self.group_stem(sub)}" for sub in self.subgroups(group)
+        )
         tokens.extend(
             f"GM{_DEP_FIELD_SEP}{member.usr}{_DEP_FIELD_SEP}{member.content_hash}"
             for member in self.group_symbols(group)
