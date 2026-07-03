@@ -24,7 +24,7 @@ implications: **the eigen (and abseil) `clangquill-sphinx` stage crashes
 Sphinx mid-build**, so the published 8.2 s "render" number times a build
 that dies ~48 % through reading sources — and, because the environment is
 never saved, its `noop`/`incremental` numbers can never benefit from
-Sphinx's own incrementality. Details in [Finding 5](#finding-5).
+Sphinx's own incrementality. Details in Finding 5 below.
 
 ## Method
 
@@ -86,7 +86,8 @@ single-threaded" fairness note is no longer true (both tools now use all
 cores). The `benchmark` workflow only refreshes `docs/benchmarks.md` on
 version tags, so the gap will persist until a release.
 
-**Suggested actions**
+**Suggested actions:**
+
 - Cut a release (or add a manual-dispatch path that publishes
   `docs/benchmarks.md` from `main`) so the public numbers reflect the
   batching/parallelism work.
@@ -115,7 +116,8 @@ inputs are re-parsed as a single umbrella batch on one thread, and every
 umbrella re-pays the full parse of the common header prelude
 (`parser.cpp:parse_batch`).
 
-**Suggested actions**
+**Suggested actions:**
+
 - Use a smaller `tu_batch` for the *incremental* re-parse path
   (`pipeline._parse_tus_into`): stale sets are usually small, so batching
   them at e.g. 8 recovers thread-pool parallelism without changing cold
@@ -142,7 +144,8 @@ absl/std prelude is read + hashed ~7×).
 The hash only feeds cache invalidation and page fingerprints — nothing
 needs a cryptographic digest.
 
-**Suggested actions**
+**Suggested actions:**
+
 - Share a process-wide `path → (mtime, size, digest)` cache across batches
   and workers (a mutex-guarded map, or per-worker maps merged like
   `ParsedModule`s) so each file is read and hashed once per run.
@@ -206,7 +209,8 @@ Consequences for the published numbers:
   incrementality works fine, as the clangquill-self row already showed:
   1.79 s cold / 0.62 s noop, exit 0).
 
-**Suggested actions**
+**Suggested actions:**
+
 - In the generator, detect and de-duplicate same-name declarations of
   conflicting kinds on a page (or emit the degraded ones as plain code
   blocks instead of `cpp:*` directives) so a mis-extracted symbol can never
