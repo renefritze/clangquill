@@ -1,10 +1,12 @@
 ---
 # Exercise the ClangQuill-vs-Doxygen benchmark harness and publish the results
 # into the docs. Runs on version tags (`v*`) and on manual dispatch; a tagged
-# run regenerates docs/benchmarks.md and opens a pull request against main with
-# the refreshed numbers. By default it benchmarks every repo configured under
-# benchmarks/configs/ (the external ones are cloned blobless); a manual run can
-# narrow the scope via the `repos` input.
+# run (or a manual dispatch with `publish_docs` enabled) regenerates
+# docs/benchmarks.md and opens a pull request against main with the refreshed
+# numbers, so the published page can be brought up to date with main without
+# waiting for the next release. By default it benchmarks every repo configured
+# under benchmarks/configs/ (the external ones are cloned blobless); a manual
+# run can narrow the scope via the `repos` input.
 name: benchmark
 on:
   push:
@@ -24,6 +26,11 @@ on:
       warmup:
         description: Un-recorded warmup repetitions
         default: '1'
+      publish_docs:
+        description: Also regenerate docs/benchmarks.md from this run and open the
+          docs PR against main (otherwise the run only reports its results)
+        type: boolean
+        default: false
 # One benchmark run per ref at a time; a newer push cancels an in-flight run so
 # results are not interleaved and runners are not wasted.
 concurrency:
@@ -44,10 +51,12 @@ jobs:
         # other workflows (GitHub suppresses recursive runs), so the docs PR's
         # CI would never start; an App installation token sidesteps that and
         # also attributes the PR to the App instead of github-actions[bot].
-        # Gated to tag runs by the `if` below: dispatch runs skip both this
+        # Gated to publishing runs (tags, or a dispatch that opted in via
+        # publish_docs) by the `if` below: other dispatch runs skip both this
         # step and the PR step, so the token is only minted when it is used.
         id: app-token
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch'
+          && inputs.publish_docs)
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           # The client ID is not secret; the private key is stored as a repo
@@ -136,9 +145,12 @@ jobs:
           path: benchmarks/results/
           if-no-files-found: ignore
       - name: Update docs benchmark page
-        # Only publish on a version tag; a manual dispatch just runs the
-        # benchmark without touching the docs.
-        if: startsWith(github.ref, 'refs/tags/v')
+        # Publish on a version tag, or on a manual dispatch that opted in via
+        # publish_docs (so the public numbers can be refreshed from main between
+        # releases); any other dispatch just runs the benchmark without touching
+        # the docs.
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch'
+          && inputs.publish_docs)
         run: |
           latest=$(find benchmarks/results -maxdepth 1 -name '*.md' | sort | tail -1)
           if [ -z "$latest" ]; then
@@ -160,12 +172,14 @@ jobs:
         # end-of-file-fixer, …) may rewrite the file and exit non-zero on the
         # first pass, so swallow that, then re-run to assert the result is
         # actually clean and fail the job on any remaining (unfixable) error.
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch'
+          && inputs.publish_docs)
         run: |
           uvx pre-commit run --files docs/benchmarks.md --color=always || true
           uvx pre-commit run --files docs/benchmarks.md --color=always
       - name: Open docs update PR against main
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch'
+          && inputs.publish_docs)
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1  # v8.1.1
         with:
           # The minted App installation token, so the PR is opened by the

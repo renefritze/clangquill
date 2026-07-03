@@ -21,10 +21,12 @@ For every `(repo, stage)` pair, three scenarios are timed:
 - **incremental** — apply a small fixed patch, then rebuild.
 
 ClangQuill's incremental cache (only active with `--cache-dir`) makes *noop*
-cheap — the parse is skipped entirely. *incremental* currently re-parses the
-whole module (the cache is all-or-nothing on the parse side) but rewrites only
-the changed pages. Doxygen has no parse cache and re-parses on every run, which
-is exactly the contrast the benchmark surfaces.
+cheap — the parse is skipped entirely. *incremental* re-parses only the
+translation units whose include closure contains the patched file and rewrites
+only the changed pages. Note the configured patch targets are widely-included
+headers, so the stale set can legitimately approach the whole module. Doxygen
+has no parse cache and re-parses on every run, which is exactly the contrast
+the benchmark surfaces.
 
 ## Prerequisites
 
@@ -88,9 +90,11 @@ sphinx/myst toolchain, **builds clangquill from the checked-out source** (agains
 LLVM 22 from apt.llvm.org, the same libclang major the release wheels bundle) so
 the published numbers measure the commit they are labeled with, runs the
 harness, appends the report to the job summary, uploads the raw results
-as an artifact, and — on a tagged run — regenerates
+as an artifact, and — on a tagged run, or a manual dispatch with the
+`publish_docs` input enabled — regenerates
 [`docs/benchmarks.md`](../docs/benchmarks.md) and opens a pull request against
-`main` with the refreshed numbers (so the published docs track tagged releases).
+`main` with the refreshed numbers (so the published docs track tagged releases,
+and can be refreshed from `main` between releases when the numbers have moved).
 By default it benchmarks every config under `configs/` (the external repos are
 cloned blobless); a manual dispatch can narrow `--repos` or change `--tools` via
 the workflow inputs.
@@ -139,8 +143,10 @@ edit deterministic without shipping brittle diffs.
 - **Work metrics in the report**: each repo section pairs the timings with the
   cold-run symbol/file/page counts and output sizes for both tools (plus any
   non-zero exit codes), so a fast run that extracted little is visible as such.
-- **Single-threaded & graphviz-free**: Doxygen runs with `HAVE_DOT = NO` and
-  ClangQuill is single-threaded, so neither gets a parallelism advantage.
+- **All cores for both tools & graphviz-free**: Doxygen runs with
+  `NUM_PROC_THREADS = 0` (all available CPUs) and `HAVE_DOT = NO`, matching
+  ClangQuill's default `jobs = 0` (auto-detected CPU count) parallel parse and
+  `sphinx-build -j auto`, so neither tool gets a parallelism advantage.
 - **Recorded provenance**: tool + libclang versions, resolved commit, machine
   info and timestamp are stored with the numbers.
 
