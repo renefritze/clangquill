@@ -97,7 +97,7 @@ wheels = [
 
 [[package]]
 name = "clangquill"
-version = "0.2.0"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -106,10 +106,10 @@ dependencies = [
     { name = "rich" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c4/8c/8ded9d368c3d6a006858c7b5a0a25202de9eafea4ddc95d6a55da3d6f814/clangquill-0.2.0.tar.gz", hash = "sha256:5a3b6cb5d226d57c7589e83581fd2317ed58906ce120f944f4f8e7616e9498cb", size = 1504841, upload-time = "2026-06-09T10:06:00.852Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/e2/e3897949749ce42b35049bd1de18cc056fa8549b2099d3df83b1d1404c66/clangquill-0.8.0.tar.gz", hash = "sha256:db6859400183b64705e1b5486c991dbc002bf25df36a25320af1979e9f14dea9", size = 1604733, upload-time = "2026-07-04T09:13:18.497Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/99/5f/2299e9c1bc5f9dd193cb390f4e7f8123d91103c811c5aff52f0afb085f46/clangquill-0.2.0-cp313-cp313-manylinux_2_34_aarch64.whl", hash = "sha256:2b6861cc49740754011533fd0003f8e66048c1b19da2d5d250f44ae60fcc6702", size = 56891341, upload-time = "2026-06-09T10:05:50.837Z" },
-    { url = "https://files.pythonhosted.org/packages/6d/29/7575735f506b21c2d9a7bb09e6f667e865b5e0d9e544f31750f8d3368ac1/clangquill-0.2.0-cp313-cp313-manylinux_2_34_x86_64.whl", hash = "sha256:a4ff39b8aa7e7cf8bb135ccbb2b6306ef8f73891567f73610d61a6788ed5397e", size = 60534569, upload-time = "2026-06-09T10:05:57.54Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/5c/41162870093da51f71d334d18e0f25ab22ddffc820981625e1dcd432ce9d/clangquill-0.8.0-cp313-cp313-manylinux_2_34_aarch64.whl", hash = "sha256:8704c8085926586320de5a166e3984da7f452c653299f9c2956766905c4a8a81", size = 56947418, upload-time = "2026-07-04T09:13:12.707Z" },
+    { url = "https://files.pythonhosted.org/packages/13/7b/db5532d46faedd8bd1d4c3378b2ca4fd70e1c89b6ffa2006c90388079d08/clangquill-0.8.0-cp313-cp313-manylinux_2_34_x86_64.whl", hash = "sha256:c593dc7bb8a0093fa388db354c1b684b8d8685f64ca21e8e7eb11b8864da3a08", size = 60601601, upload-time = "2026-07-04T09:13:16Z" },
 ]
 
 [[package]]
