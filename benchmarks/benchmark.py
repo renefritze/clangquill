@@ -9,20 +9,26 @@ numbers line up apples-to-apples:
     parse -> structured  ``clangquill build`` (-> MyST)   ``doxygen`` GENERATE_XML
     render -> HTML       ``sphinx-build`` (MyST -> HTML)   ``doxygen`` GENERATE_HTML
 
-For every ``(repo, stage)`` pair three *scenarios* are measured, each repeated
+For every ``(repo, stage)`` pair four *scenarios* are measured, each repeated
 ``--repeat`` times after ``--warmup`` un-recorded passes:
 
-    cold         build from a clean state (fresh clangquill ``--cache-dir``)
-    noop         immediately rebuild with no source change
-    incremental  apply a small fixed patch, then rebuild
+    cold              build from a clean state (fresh clangquill ``--cache-dir``)
+    noop              immediately rebuild with no source change
+    incremental       apply a small fixed patch to a widely-included header,
+                      then rebuild
+    incremental-leaf  apply the same patch to a leaf header instead, then
+                      rebuild (skipped for configs without ``patch.leaf_files``)
 
 ClangQuill's incremental cache (only active with ``--cache-dir``) makes the
 ``noop`` scenario cheap (the parse is skipped entirely); ``incremental``
 re-parses only the translation units whose include closure contains the patched
-file and rewrites only the changed pages. Note the configured patch targets are
-widely-included headers, so the stale set can legitimately approach the whole
-module. Doxygen has no parse cache and re-parses every run, which is exactly
-the contrast the benchmark surfaces.
+file and rewrites only the changed pages. The two incremental scenarios bracket
+the cache's behaviour: the configured ``incremental`` patch targets are
+widely-included headers, so the stale set legitimately approaches the whole
+module (a worst case), while ``incremental-leaf`` patches a header almost
+nothing includes, showing the cost of the everyday local edit. Doxygen has no
+parse cache and re-parses every run, which is exactly the contrast the
+benchmark surfaces.
 
 Design notes / benchmarking practices baked in:
 
@@ -73,7 +79,7 @@ DEFAULT_RESULTS_DIR = HERE / "results"
 # ``doxygen-xml`` are the parse stages (structured intermediate); the other two
 # are the human-facing HTML render stages.
 ALL_STAGES = ("clangquill-myst", "clangquill-sphinx", "doxygen-xml", "doxygen-html")
-ALL_SCENARIOS = ("cold", "noop", "incremental")
+ALL_SCENARIOS = ("cold", "noop", "incremental", "incremental-leaf")
 
 # A deterministic, identical-everywhere "fixed patch": a fully documented C++
 # snippet appended to each configured target header. Appending (rather than
@@ -127,6 +133,11 @@ class RepoConfig:
     # phase, and being re-rendered on every symbol change.
     group_by: str = ""
     patch_files: list[str] = field(default_factory=list)
+    # Leaf-header counterpart of ``patch_files`` for the ``incremental-leaf``
+    # scenario: headers (almost) nothing else includes, so the stale set is a
+    # handful of translation units instead of most of the module. Empty list =
+    # the scenario is skipped for this config.
+    leaf_patch_files: list[str] = field(default_factory=list)
 
     @classmethod
     def from_toml(cls, path: Path) -> RepoConfig:
@@ -148,6 +159,7 @@ class RepoConfig:
             doxygen_file_patterns=list(data.get("doxygen_file_patterns", [])),
             group_by=data.get("group_by", ""),
             patch_files=list(patch.get("files", [])),
+            leaf_patch_files=list(patch.get("leaf_files", [])),
         )
 
 
@@ -332,10 +344,15 @@ def prepare_repo(cfg: RepoConfig, work_dir: Path, *, fresh_clone: bool) -> RepoC
     return RepoContext(cfg, source, bench_dir, resolved_ref=resolved_ref, commit=commit)
 
 
-def apply_patch(ctx: RepoContext) -> list[Path]:
-    """Append the fixed snippet to each configured target file. Returns them."""
+def apply_patch(ctx: RepoContext, files: list[str] | None = None) -> list[Path]:
+    """Append the fixed snippet to each target file (default: ``patch_files``).
+
+    ``files`` selects the patch-target list — the widely-included
+    ``patch_files`` for the ``incremental`` scenario or the ``leaf_patch_files``
+    for ``incremental-leaf``. Returns the paths actually patched.
+    """
     patched: list[Path] = []
-    for rel in ctx.config.patch_files:
+    for rel in ctx.config.patch_files if files is None else files:
         target = ctx.source_dir / rel
         if not target.is_file():
             print(f"  WARNING: patch target {rel!r} missing in {ctx.config.name}", file=sys.stderr)
@@ -357,14 +374,14 @@ def reset_state(ctx: RepoContext) -> None:
     """Return the target to a clean pre-build state between repetitions.
 
     Generated artifacts (MyST, Sphinx, Doxygen, cache, logs) are removed and any
-    lingering patch is reverted. Only the configured ``patch_files`` are
-    ``git checkout`` reverted — never the whole tree — so running against a
-    ``local`` repo can never clobber the operator's other uncommitted changes
-    (the harness only ever edits those patch targets).
+    lingering patch is reverted. Only the configured ``patch_files`` /
+    ``leaf_patch_files`` are ``git checkout`` reverted — never the whole tree —
+    so running against a ``local`` repo can never clobber the operator's other
+    uncommitted changes (the harness only ever edits those patch targets).
     """
     for path in (ctx.sphinx_src, ctx.sphinx_out, ctx.cache_dir, ctx.doxygen_out("xml"), ctx.doxygen_out("html")):
         wipe(path)
-    for rel in ctx.config.patch_files:
+    for rel in ctx.config.patch_files + ctx.config.leaf_patch_files:
         run_git(["checkout", "--", rel], ctx.source_dir, check=False)
 
 
@@ -504,8 +521,9 @@ def run_stage(
 
     Returns a nested dict ``{scenario: {"samples": [...], "stats": {...}, ...}}``.
     Each repetition resets to a clean state, then runs the cold / noop /
-    incremental sequence so the three scenarios share one warmed clone but
-    independent build state.
+    incremental / incremental-leaf sequence so the scenarios share one warmed
+    clone but independent build state. ``incremental-leaf`` runs only for
+    configs that name ``patch.leaf_files``; elsewhere it records no samples.
     """
 
     # ``cold_prep`` produces the timed command's *preconditions* from a clean
@@ -573,6 +591,26 @@ def run_stage(
             finally:
                 revert_patch(ctx, patched)
 
+        # -- incremental-leaf ------------------------------------------------ #
+        leaf = None
+        leaf_output = None
+        if "incremental-leaf" in scenarios and ctx.config.leaf_patch_files:
+            # Reverting the wide patch above re-staled its targets, so re-sync
+            # the cached state with an untimed rebuild first: this scenario must
+            # measure the cost of the leaf edit alone.
+            if stage.startswith("clangquill"):
+                untimed(*myst_cmd(), tag=f"leaf-resync-myst-{pass_idx}")
+            if stage == "clangquill-sphinx":
+                untimed(argv, cwd, tag=f"leaf-resync-sphinx-{pass_idx}")
+            patched = apply_patch(ctx, ctx.config.leaf_patch_files)
+            try:
+                if stage == "clangquill-sphinx":
+                    untimed(*myst_cmd(), tag=f"sphinx-leaf-myst-{pass_idx}")
+                leaf = measure(argv, cwd, _stage_log(ctx, stage, "incremental-leaf", rep))
+                leaf_output = dir_stats(out_dir)
+            finally:
+                revert_patch(ctx, patched)
+
         if not recording:
             continue
         # Each scenario records the output snapshot taken right after it ran;
@@ -582,6 +620,7 @@ def run_stage(
             ("cold", cold, cold_output),
             ("noop", noop, noop_output),
             ("incremental", incr, incr_output),
+            ("incremental-leaf", leaf, leaf_output),
         ):
             if scenario not in scenarios or m is None:
                 continue
@@ -852,10 +891,12 @@ def _derived_lines(results: dict, repo: str, scenarios: list[str]) -> list[str]:
     cold = _median(results, repo, "clangquill-myst", "cold")
     noop = _median(results, repo, "clangquill-myst", "noop")
     incr = _median(results, repo, "clangquill-myst", "incremental")
+    leaf = _median(results, repo, "clangquill-myst", "incremental-leaf")
     if cold and noop:
         out.append(
             f"- **clangquill cache** — cold→noop {cold / noop:.1f}× faster"
-            + (f", cold→incremental {cold / incr:.1f}× faster" if incr else ""),
+            + (f", cold→incremental {cold / incr:.1f}× faster" if incr else "")
+            + (f", cold→incremental-leaf {cold / leaf:.1f}× faster" if leaf else ""),
         )
     return out
 

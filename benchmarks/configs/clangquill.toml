@@ -14,3 +14,6 @@ doxygen_file_patterns = ["*.hpp"]
 
 [patch]
 files = ["src/cpp/model/symbol.hpp"]
+# A header no other input includes, so the incremental-leaf scenario
+# re-parses a single translation unit.
+leaf_files = ["src/cpp/core/version.hpp"]

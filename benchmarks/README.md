@@ -14,19 +14,23 @@ comparison (`clangquill-myst` vs `doxygen-xml`).
 
 ## Scenarios
 
-For every `(repo, stage)` pair, three scenarios are timed:
+For every `(repo, stage)` pair, four scenarios are timed:
 
 - **cold** — build from a clean state (a fresh clangquill `--cache-dir`).
 - **noop** — immediately rebuild with no source change.
-- **incremental** — apply a small fixed patch, then rebuild.
+- **incremental** — apply a small fixed patch to a widely-included header,
+  then rebuild (the invalidation worst case: the stale set can legitimately
+  approach the whole module).
+- **incremental-leaf** — apply the same patch to a *leaf* header (one almost
+  nothing else includes), then rebuild — the cost of the everyday local edit.
+  Skipped for configs without `patch.leaf_files`.
 
 ClangQuill's incremental cache (only active with `--cache-dir`) makes *noop*
-cheap — the parse is skipped entirely. *incremental* re-parses only the
-translation units whose include closure contains the patched file and rewrites
-only the changed pages. Note the configured patch targets are widely-included
-headers, so the stale set can legitimately approach the whole module. Doxygen
-has no parse cache and re-parses on every run, which is exactly the contrast
-the benchmark surfaces.
+cheap — the parse is skipped entirely. Both incremental scenarios re-parse only
+the translation units whose include closure contains the patched file and
+rewrite only the changed pages; together they bracket the cache's behaviour
+between the worst case and the everyday edit. Doxygen has no parse cache and
+re-parses on every run, which is exactly the contrast the benchmark surfaces.
 
 ## Prerequisites
 
@@ -121,13 +125,14 @@ group_by = "namespace"              # clangquill --group-by (empty = tool defaul
                                     # set "namespace" for namespace-rooted libraries so one
                                     # root namespace doesn't collapse onto a single huge page)
 [patch]
-files = ["Eigen/src/Core/Matrix.h"]  # deterministic incremental-edit targets
+files = ["Eigen/src/Core/Matrix.h"]      # widely-included incremental-edit targets
+leaf_files = ["Eigen/src/Core/Stride.h"] # leaf targets for incremental-leaf (optional)
 ```
 
 The "fixed patch" is a constant, documented C++ snippet appended to each
-`patch.files` target (identical across repos) and reverted with `git checkout`
-after each measured run. Pinning `ref` guarantees the file exists, making the
-edit deterministic without shipping brittle diffs.
+`patch.files` (or `patch.leaf_files`) target (identical across repos) and
+reverted with `git checkout` after each measured run. Pinning `ref` guarantees
+the file exists, making the edit deterministic without shipping brittle diffs.
 
 ## Benchmarking practices baked in
 

@@ -21,3 +21,6 @@ doxygen_file_patterns = ["*.hh"]
 
 [patch]
 files = ["dune/gdt/operators/interfaces.hh"]
+# A top-level input no other input includes, so the incremental-leaf scenario
+# re-parses a single translation unit.
+leaf_files = ["dune/gdt/norms.hh"]
