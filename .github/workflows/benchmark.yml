@@ -95,16 +95,27 @@ jobs:
         # locked clangquill wheel as a placeholder), then the wheel is replaced
         # with a build of the checked-out source so the published numbers track
         # the commit they are labeled with. The assert fails fast if the core
-        # silently linked against an older distro libclang.
+        # silently linked against an older distro libclang, and the version the
+        # checkout build installed is recorded so the run step can verify the
+        # benchmark actually measures it (see below).
         env:
           SKBUILD_CMAKE_DEFINE: CLANGQUILL_WITH_LIBCLANG=ON;LibClang_ROOT=/usr/lib/llvm-22
         run: |
           uv sync --frozen --project benchmarks
           uv pip install --python benchmarks/.venv/bin/python --reinstall-package clangquill .
           benchmarks/.venv/bin/python -c "from clangquill._libclang import libclang_major; assert (libclang_major() or 0) >= 22, libclang_major()"
+          built=$(benchmarks/.venv/bin/python -c "import importlib.metadata as m; print(m.version('clangquill'))")
+          echo "Built clangquill $built from the checkout"
+          echo "CLANGQUILL_BUILT_VERSION=$built" >> "$GITHUB_ENV"
       - name: Run benchmark
         # `uv run` puts the project's venv bin on PATH, so the harness resolves
         # `clangquill` and `sphinx-build` by name; `doxygen` comes from apt.
+        # `--no-sync` is load-bearing: without it `uv run` re-syncs the project
+        # environment to benchmarks/uv.lock, silently replacing the checkout
+        # build with the locked PyPI wheel — which is why every previously
+        # published run reported `clangquill 0.2.0` regardless of the tag it ran
+        # on. The version check makes that failure loud instead of silent: the
+        # environment must still hold exactly the build the install step made.
         # Dispatch inputs are passed via env (not interpolated into the script)
         # so they can never expand into executable shell.
         env:
@@ -115,7 +126,12 @@ jobs:
           BENCH_REPEAT: ${{ inputs.repeat || '3' }}
           BENCH_WARMUP: ${{ inputs.warmup || '1' }}
         run: |
-          uv run --project benchmarks python benchmarks/benchmark.py \
+          actual=$(benchmarks/.venv/bin/python -c "import importlib.metadata as m; print(m.version('clangquill'))")
+          if [ "$actual" != "$CLANGQUILL_BUILT_VERSION" ]; then
+            echo "benchmarks venv holds clangquill $actual, not the checkout build $CLANGQUILL_BUILT_VERSION — refusing to benchmark the wrong binary" >&2
+            exit 1
+          fi
+          uv run --no-sync --project benchmarks python benchmarks/benchmark.py \
             --repos "$BENCH_REPOS" \
             --tools "$BENCH_TOOLS" \
             --repeat "$BENCH_REPEAT" \
