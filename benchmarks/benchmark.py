@@ -597,11 +597,14 @@ def run_stage(
         if "incremental-leaf" in scenarios and ctx.config.leaf_patch_files:
             # Reverting the wide patch above re-staled its targets, so re-sync
             # the cached state with an untimed rebuild first: this scenario must
-            # measure the cost of the leaf edit alone.
-            if stage.startswith("clangquill"):
-                untimed(*myst_cmd(), tag=f"leaf-resync-myst-{pass_idx}")
-            if stage == "clangquill-sphinx":
-                untimed(argv, cwd, tag=f"leaf-resync-sphinx-{pass_idx}")
+            # measure the cost of the leaf edit alone. When the incremental
+            # scenario didn't run this pass, nothing was patched or reverted and
+            # the cache is still in sync from cold/noop, so no resync is needed.
+            if "incremental" in scenarios:
+                if stage.startswith("clangquill"):
+                    untimed(*myst_cmd(), tag=f"leaf-resync-myst-{pass_idx}")
+                if stage == "clangquill-sphinx":
+                    untimed(argv, cwd, tag=f"leaf-resync-sphinx-{pass_idx}")
             patched = apply_patch(ctx, ctx.config.leaf_patch_files)
             try:
                 if stage == "clangquill-sphinx":
