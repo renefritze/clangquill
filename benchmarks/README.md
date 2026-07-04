@@ -158,8 +158,12 @@ the file exists, making the edit deterministic without shipping brittle diffs.
   still record normally — there they signal diagnostics, not an aborted build.)
 - **All cores for both tools & graphviz-free**: Doxygen runs with
   `NUM_PROC_THREADS = 0` (all available CPUs) and `HAVE_DOT = NO`, matching
-  ClangQuill's default `jobs = 0` (auto-detected CPU count) parallel parse and
-  `sphinx-build -j auto`, so neither tool gets a parallelism advantage.
+  ClangQuill's default `jobs = 0` (auto-detected CPU count) parallel parse.
+  `sphinx-build` runs with `-j 2` rather than `-j auto`: each forked read
+  worker copies the parent's loaded environment (measured ~2.3 GB per worker
+  on eigen's cpp-domain-heavy pages during incremental builds), and `-j auto`
+  on a 4-core/16 GB runner exhausted memory and got the VM killed. Two
+  workers keep the render parallel while bounding the peak.
 - **Recorded provenance**: tool + libclang versions, resolved commit, machine
   info and timestamp are stored with the numbers.
 
