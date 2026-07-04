@@ -414,6 +414,45 @@ def test_incremental_shared_header_change_reparses_every_dependent(
 
 
 @requires_libclang
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        # Auto batching re-batches the (usually small) stale set at the
+        # incremental size so it spreads across the thread pool instead of
+        # re-parsing as one cold-sized umbrella on a single thread.
+        (0, pipeline._INCREMENTAL_TU_BATCH),  # noqa: SLF001
+        # An explicit user tu_batch is respected on the incremental path too.
+        (1, 1),
+    ],
+)
+def test_incremental_reparse_uses_smaller_auto_batch(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    configured: int,
+    expected: int,
+) -> None:
+    (project / "alpha.hpp").write_text("/// alpha ns\nnamespace alpha { /// f\nint f(); }\n")
+    (project / "beta.hpp").write_text("/// beta ns\nnamespace beta { /// g\nint g(); }\n")
+    config = Config(input=["alpha.hpp", "beta.hpp"], output_dir="api", cache_dir=".cache", tu_batch=configured)
+    build(config, base_dir=project)
+
+    tu_batches: list[int] = []
+    real_tus = _core.parse_tus_to_sqlite
+
+    def spy_tus(inputs: list[str], db: str, opt: _core.ParseOptions) -> object:
+        tu_batches.append(opt.tu_batch)
+        return real_tus(inputs, db, opt)
+
+    monkeypatch.setattr(_core, "parse_tus_to_sqlite", spy_tus)
+
+    (project / "alpha.hpp").write_text("/// alpha ns edited\nnamespace alpha { /// f\nint f(); }\n")
+    result = build(config, base_dir=project)
+
+    assert result.parsed
+    assert tu_batches == [expected]
+
+
+@requires_libclang
 def test_incremental_partial_parse_failure_is_atomic(
     project: Path,
     monkeypatch: pytest.MonkeyPatch,

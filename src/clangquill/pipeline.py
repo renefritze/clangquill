@@ -56,6 +56,17 @@ MANIFEST_NAME = ".clangquill-manifest.json"
 # Filename of the persisted SQLite IR within a configured cache directory.
 IR_NAME = "clangquill.sqlite"
 
+# Umbrella batch size used for the *incremental* re-parse path when
+# ``tu_batch`` is auto (0). Stale sets are usually small — a leaf-header edit
+# invalidates a handful of translation units — and the cold-build default of 64
+# would lump them into a single umbrella parsed on one thread, serially
+# re-paying the whole shared ``#include`` prelude. A smaller batch spreads a
+# small stale set across the thread pool. Cold builds keep the larger default:
+# batch composition only affects the TUs being re-parsed here, so the
+# determinism rationale for the fixed cold batch (see ``kDefaultTuBatch`` in
+# ``parser.cpp``) does not bind on this path.
+_INCREMENTAL_TU_BATCH = 8
+
 
 @dataclass
 class BuildResult:
@@ -509,6 +520,14 @@ def _parse_tus_into(
     cache, which is only updated afterwards) is left untouched, forcing a clean
     rebuild next run. Returns the fresh dependency map and the diagnostics.
     """
+    if options.tu_batch == 0:
+        # Auto batching: stale sets are usually far smaller than a cold build's
+        # input list, so re-batch them at _INCREMENTAL_TU_BATCH to recover
+        # thread-pool parallelism (a single cold-sized umbrella would re-parse
+        # the whole set on one thread). An explicit user tu_batch is respected.
+        # The caller never reuses ``options`` after this call, so mutating the
+        # incremental path's copy cannot leak into a full rebuild.
+        options.tu_batch = _INCREMENTAL_TU_BATCH
     staged = _new_temp_db(ir_path.parent)
     try:
         shutil.copyfile(ir_path, staged)

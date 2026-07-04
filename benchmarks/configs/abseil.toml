@@ -17,3 +17,6 @@ doxygen_file_patterns = ["*.h"]
 
 [patch]
 files = ["absl/strings/string_view.h"]
+# A header (almost) nothing else in the input set includes, so the
+# incremental-leaf scenario re-parses only a handful of translation units.
+leaf_files = ["absl/strings/ascii.h"]

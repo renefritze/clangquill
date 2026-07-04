@@ -15,3 +15,6 @@ doxygen_file_patterns = ["*.h"]
 
 [patch]
 files = ["Eigen/src/Core/Matrix.h"]
+# A header no sibling Core header includes, so the incremental-leaf scenario
+# re-parses only its own translation unit.
+leaf_files = ["Eigen/src/Core/Stride.h"]
