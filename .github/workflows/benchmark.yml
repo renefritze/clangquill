@@ -139,7 +139,8 @@ jobs:
           ( while true; do
               echo "$(date -u +%H:%M:%S) mem_used_mb=$(free -m | awk '/Mem:/ {print $3}') disk_avail_mb=$(df -m --output=avail / | tail -1 | tr -d ' ')"
               sleep 15
-            done > /tmp/resource-monitor.log 2>&1 & )
+            done > /tmp/resource-monitor.log 2>&1 &
+            echo "$!" > /tmp/resource-monitor.pid )
           # -u keeps the harness's per-repo/per-stage progress lines unbuffered:
           # python block-buffers stdout on a pipe, so a killed run used to leave
           # no trace of how far it got in the CI log.
@@ -151,6 +152,11 @@ jobs:
       - name: Publish results to job summary
         if: always()
         run: |
+          # The sampler has served its purpose once the benchmark step is over;
+          # stop it so it does not linger through the remaining steps.
+          if [ -f /tmp/resource-monitor.pid ]; then
+            kill "$(cat /tmp/resource-monitor.pid)" 2>/dev/null || true
+          fi
           # Resource-monitor tail and kernel OOM traces first: when the runner
           # is torn down mid-benchmark this is the evidence of what happened.
           if [ -f /tmp/resource-monitor.log ]; then

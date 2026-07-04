@@ -1022,16 +1022,28 @@ def main(argv: list[str] | None = None) -> int:
     json_path = args.results_dir / f"{stamp}.json"
     md_path = args.results_dir / f"{stamp}.md"
 
-    def checkpoint() -> None:
+    def atomic_write(path: Path, content: str) -> None:
+        """Write ``content`` to ``path`` via a sibling temp file and rename.
+
+        A checkpoint exists to survive the process being killed; an in-place
+        ``write_text`` truncates first, so a kill mid-write would corrupt the
+        very file meant to outlive it. The rename makes each write all-or-nothing.
+        """
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(path)
+
+    def checkpoint(markdown: str | None = None) -> None:
         """Persist the (possibly partial) results gathered so far.
 
         A full run takes long enough that an interrupted or killed process is a
         real possibility; rewriting the report after every completed stage means
         whatever finished survives, both as data and as a marker of how far the
-        run got before dying.
+        run got before dying. ``markdown`` lets the final call reuse an
+        already-rendered report instead of rendering twice.
         """
-        json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        md_path.write_text(render_markdown(payload), encoding="utf-8")
+        atomic_write(json_path, json.dumps(payload, indent=2))
+        atomic_write(md_path, markdown if markdown is not None else render_markdown(payload))
 
     for cfg in configs:
         print(f"\n=== {cfg.name} ===")
@@ -1054,8 +1066,8 @@ def main(argv: list[str] | None = None) -> int:
                 payload["results"][cfg.name][stage] = {"error": str(exc)}
             checkpoint()
 
-    checkpoint()
     markdown = render_markdown(payload)
+    checkpoint(markdown)
 
     print("\n" + markdown)
     print(f"\nWrote {json_path}\n      {md_path}")
