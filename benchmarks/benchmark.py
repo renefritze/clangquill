@@ -38,7 +38,11 @@ Design notes / benchmarking practices baked in:
   timestamp are recorded alongside the numbers;
 * a non-zero exit is recorded, not fatal: libclang emits diagnostics on heavy,
   dependency-rich repos (abseil/eigen) without their full include trees, and
-  that is a real-world data point rather than a benchmark failure.
+  that is a real-world data point rather than a benchmark failure. The one
+  exception is the ``clangquill-sphinx`` stage: a non-zero ``sphinx-build``
+  exit means the build *died partway* (e.g. an exception mid-read), so its
+  wall clock is not a render time — such samples are recorded but excluded
+  from the statistics, and the report shows ``failed`` instead of a number.
 
 The driver depends only on the standard library; the tools it *drives*
 (``clangquill``, ``sphinx-build`` + ``myst-parser``, ``doxygen``) are detected
@@ -74,6 +78,17 @@ DEFAULT_RESULTS_DIR = HERE / "results"
 # are the human-facing HTML render stages.
 ALL_STAGES = ("clangquill-myst", "clangquill-sphinx", "doxygen-xml", "doxygen-html")
 ALL_SCENARIOS = ("cold", "noop", "incremental")
+
+# Stages whose timed command must complete to have produced its artifact: a
+# non-zero exit there means the build aborted partway (Sphinx raising mid-read,
+# say), so the recorded wall clock measures a *fraction* of the work and would
+# both understate the true cost and hide follow-on effects (a crashed Sphinx
+# never writes its environment pickle, so noop/incremental can never benefit
+# from its incrementality). Samples from these stages with a non-zero exit are
+# kept in the raw data but excluded from the statistics. The parse stages stay
+# exempt: clangquill/doxygen exit non-zero on diagnostics while still doing all
+# their work, which is a coverage data point, not an invalid time.
+EXIT_INVALIDATES_SAMPLE = ("clangquill-sphinx",)
 
 # A deterministic, identical-everywhere "fixed patch": a fully documented C++
 # snippet appended to each configured target header. Appending (rather than
@@ -592,7 +607,12 @@ def run_stage(
             results[scenario]["samples"].append(sample)
 
     for scenario in scenarios:
-        results[scenario]["stats"] = summarize([s["wall_s"] for s in results[scenario]["samples"]])
+        samples = results[scenario]["samples"]
+        valid = [s for s in samples if stage not in EXIT_INVALIDATES_SAMPLE or not s.get("exit_code")]
+        # Crashed-build samples stay in the raw data (their exit codes are
+        # reported) but must not masquerade as timings; see EXIT_INVALIDATES_SAMPLE.
+        results[scenario]["invalid_samples"] = len(samples) - len(valid)
+        results[scenario]["stats"] = summarize([s["wall_s"] for s in valid])
     return results
 
 
@@ -725,6 +745,26 @@ def _fmt(value: float | None) -> str:
     return f"{value:.3f}" if value is not None else "—"
 
 
+def _cell(results: dict, repo: str, stage: str, scenario: str) -> str:
+    """Format one timing table cell.
+
+    A median where one exists; ``failed`` when the scenario ran but every
+    sample was an aborted build (see :data:`EXIT_INVALIDATES_SAMPLE`) — a
+    number there would be the wall clock of a partial build; an em dash when
+    the scenario was not measured at all.
+    """
+    median = _median(results, repo, stage, scenario)
+    if median is not None:
+        return f"{median:.3f}"
+    try:
+        data = results[repo][stage][scenario]
+    except (KeyError, TypeError):
+        return "—"
+    if isinstance(data, dict) and data.get("invalid_samples"):
+        return "failed"
+    return "—"
+
+
 def _cold_sample(results: dict, repo: str, stage: str) -> dict | None:
     """Return the first recorded cold sample for one ``(repo, stage)``, or None."""
     try:
@@ -818,7 +858,7 @@ def render_markdown(payload: dict) -> str:
         for stage in ALL_STAGES:
             if stage not in repo_data:
                 continue
-            cells = [_fmt(_median(payload["results"], repo, stage, sc)) for sc in scenarios]
+            cells = [_cell(payload["results"], repo, stage, sc) for sc in scenarios]
             lines.append(f"| {stage} | " + " | ".join(cells) + " |")
         lines.append("")
 

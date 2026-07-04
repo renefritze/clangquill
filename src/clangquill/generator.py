@@ -385,6 +385,16 @@ class Generator:
         self._template_cache: dict[str, Template] = {}
         self._comment_macro: Callable[[CommentModel | None], object] | None = None
         self._fields_macro: Callable[[CommentModel], object] | None = None
+        # Declarations already emitted on the page being rendered, mapping the
+        # declared name to its conflict class (see :meth:`_register_declaration`).
+        # Degraded extraction (a project parsed without its full include tree)
+        # can mis-extract the same name several times with conflicting kinds —
+        # e.g. a template function emitted as colliding ``cpp:var`` declarations
+        # — and Sphinx's C++ domain crashes on such duplicates instead of
+        # warning. Tracking what a page already declared lets later conflicting
+        # declarations degrade to plain code blocks, so one mis-extracted symbol
+        # can never take down the whole Sphinx build.
+        self._page_decls: dict[str, str] = {}
         loaders: list[FileSystemLoader | PackageLoader] = []
         if template_dirs:
             loaders.append(FileSystemLoader([str(d) for d in template_dirs]))
@@ -788,10 +798,44 @@ class Generator:
     def render_symbol(self, symbol: Symbol, *, level: int = 1) -> str:
         """Render ``symbol`` (and, for containers, its descendants) to MyST.
 
-        ``level`` is the Markdown heading depth used for section symbols.
+        ``level`` is the Markdown heading depth used for section symbols; every
+        page-root call renders at level 1 (recursive calls from the container
+        templates go deeper), which is what scopes the duplicate-declaration
+        registry to one page. A symbol whose declaration conflicts with one the
+        page already emitted (see :meth:`_register_declaration`) renders through
+        ``degraded.md.jinja`` — a plain code block instead of a ``cpp:*``
+        directive — so mis-extracted duplicates cannot crash Sphinx's C++
+        domain.
         """
-        template = self._template(f"{self.template_name(symbol)}.md.jinja")
+        if level == 1:
+            self._page_decls.clear()
+        name = "degraded" if not self._register_declaration(symbol) else self.template_name(symbol)
+        template = self._template(f"{name}.md.jinja")
         return _normalize(template.render(symbol=symbol, level=level))
+
+    def _register_declaration(self, symbol: Symbol) -> bool:
+        """Record ``symbol``'s declaration on the current page; ``False`` on conflict.
+
+        The C++ domain crashes (``_object_hierarchy_parts`` on ``None``) when a
+        page declares the same name twice with conflicting kinds or duplicates a
+        non-overloadable declaration — which degraded extraction can produce.
+        Function kinds share one conflict class so legitimate overloads still
+        render as sibling ``cpp:function`` directives, and the registry key
+        carries the specialization suffix so a class template and its
+        specializations (distinct domain objects) never collide. Namespaces are
+        exempt: re-declaring a namespace is ordinary C++ and safe in the domain.
+        """
+        if symbol.kind == SymbolKind.NAMESPACE:
+            return True
+        name = (symbol.qualified_name or symbol.spelling) + _spec_suffix(symbol)
+        if not name:
+            return True
+        conflict_class = "function" if symbol.kind in _FUNCTION_KINDS else _DIRECTIVE_FOR.get(symbol.kind, "cpp:type")
+        seen = self._page_decls.get(name)
+        if seen is None:
+            self._page_decls[name] = conflict_class
+            return True
+        return seen == conflict_class == "function"
 
     def render_file(self, source_file: SourceFile, *, level: int = 1) -> str:
         """Render every top-of-file symbol declared in ``source_file``.
@@ -801,6 +845,7 @@ class Generator:
         scope), not just global roots — otherwise a file holding only
         namespace-nested symbols would render nothing.
         """
+        self._page_decls.clear()
         template = self._template("file.md.jinja")
         previous = self._file_scope
         self._file_scope = source_file.id
@@ -813,6 +858,7 @@ class Generator:
 
     def render_group(self, group: Group, *, level: int = 1) -> str:
         """Render a single documentation group page (members + subgroups)."""
+        self._page_decls.clear()
         template = self._template("group.md.jinja")
         return _normalize(template.render(group=group, level=level))
 
@@ -825,6 +871,7 @@ class Generator:
         namespaces are emitted as separate pages, so listing them here too would
         duplicate their content.
         """
+        self._page_decls.clear()
         template = self._template("namespace-page.md.jinja")
         return _normalize(template.render(symbol=symbol, symbols=members, level=level))
 
@@ -858,6 +905,7 @@ class Generator:
         MyST heading text (e.g. ``Function `geo::scale``` or ``Operators in
         `geo```) and each member renders one level deeper.
         """
+        self._page_decls.clear()
         template = self._template("member-page.md.jinja")
         return _normalize(template.render(title=title, symbols=members, level=level))
 

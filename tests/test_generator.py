@@ -70,6 +70,37 @@ def test_unique_stem_dedupes_case_insensitively() -> None:
     assert Generator._unique_stem("FOO", seen) == "FOO__"  # noqa: SLF001
 
 
+def test_conflicting_same_name_declarations_degrade_to_code_blocks(degraded_db: Path, tmp_path: Path) -> None:
+    # Degraded extraction can emit the same name several times with conflicting
+    # kinds (the eigen benchmark mis-extracts a template function as colliding
+    # `cpp:var` declarations); Sphinx's C++ domain crashes on such duplicates
+    # instead of warning, so only the first declaration of a name may emit a
+    # domain directive — later conflicts render as plain code blocks.
+    out = tmp_path / "api"
+    with Store.open(degraded_db) as store:
+        Generator(store).generate(out)
+
+    page = (out / "Eigen.md").read_text()
+    # First declaration keeps its directive; the two conflicting repeats do not.
+    assert page.count("{cpp:var} int Eigen::plogical_shift_right") == 1
+    assert page.count("{cpp:type}") == 0
+    # The degraded repeats stay visible as plain C++ code blocks.
+    assert page.count("```cpp") == 2
+    # Legitimate overloads of one function name still render as directives.
+    assert page.count("{cpp:function}") == 2
+
+
+def test_declaration_registry_resets_between_pages(degraded_db: Path) -> None:
+    # The registry is per page: rendering the same store twice (or the same
+    # name on two different pages) must not degrade a later page's first
+    # declaration. Rendering all pages twice yields identical output.
+    with Store.open(degraded_db) as store:
+        gen = Generator(store)
+        first = [(p.stem, p.text) for p in gen.render_pages()]
+        second = [(p.stem, p.text) for p in gen.render_pages()]
+    assert first == second
+
+
 def test_generate_avoids_root_document_and_case_collisions(collision_db: Path, tmp_path: Path) -> None:
     out = tmp_path / "api"
     with Store.open(collision_db) as store:

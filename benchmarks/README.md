@@ -146,6 +146,11 @@ edit deterministic without shipping brittle diffs.
 - **Work metrics in the report**: each repo section pairs the timings with the
   cold-run symbol/file/page counts and output sizes for both tools (plus any
   non-zero exit codes), so a fast run that extracted little is visible as such.
+- **Crashed renders are not timings**: a non-zero `sphinx-build` exit means the
+  build died partway, so its wall clock measures a fraction of the work. Those
+  samples are kept in the raw JSON but excluded from the statistics, and the
+  report cell shows `failed` instead of a number. (Parse-stage non-zero exits
+  still record normally — there they signal diagnostics, not an aborted build.)
 - **All cores for both tools & graphviz-free**: Doxygen runs with
   `NUM_PROC_THREADS = 0` (all available CPUs) and `HAVE_DOT = NO`, matching
   ClangQuill's default `jobs = 0` (auto-detected CPU count) parallel parse and

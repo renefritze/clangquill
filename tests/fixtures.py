@@ -588,11 +588,91 @@ def _build_collision_db(path: Path) -> None:
         con.close()
 
 
+def _build_degraded_db(path: Path) -> None:
+    """Populate ``path`` with the colliding declarations degraded extraction emits.
+
+    Mirrors the eigen benchmark failure: a template function parsed without its
+    include tree is mis-extracted as several variable declarations of the same
+    qualified name (``int Eigen::plogical_shift_right`` twice), which Sphinx's
+    C++ domain crashes on instead of warning. Legitimate function overloads of
+    one name are included too, since those must keep rendering as directives.
+    """
+    con = sqlite3.connect(path)
+    try:
+        con.executescript(_schema_ddl())
+        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', ?)", (str(_core.SCHEMA_VERSION),))
+        con.execute("INSERT INTO files(id, path, sha256, size_bytes) VALUES(1, 'degraded.hpp', 'dd', 64)")
+
+        def sym(  # noqa: PLR0913
+            usr: str,
+            parent: str,
+            kind: int,
+            spelling: str,
+            qname: str,
+            *,
+            signature: str = "",
+            type_repr: str = "",
+            line: int = 0,
+        ) -> None:
+            con.execute(
+                "INSERT INTO symbols(usr, parent_usr, kind, spelling, qualified_name, "
+                "display_name, signature, type_repr, access, is_definition, "
+                "is_documented, content_hash, file_id, line) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 1, ?, 1, ?)",
+                (usr, parent, kind, spelling, qname, spelling, signature, type_repr, "hash-" + usr, line),
+            )
+
+        sym("c:@N@Eigen", "", 1, "Eigen", "Eigen")
+        # The same mis-extracted name, twice as a variable declaration.
+        sym(
+            "c:degraded1",
+            "c:@N@Eigen",
+            10,
+            "plogical_shift_right",
+            "Eigen::plogical_shift_right",
+            type_repr="int",
+            line=1,
+        )
+        sym(
+            "c:degraded2",
+            "c:@N@Eigen",
+            10,
+            "plogical_shift_right",
+            "Eigen::plogical_shift_right",
+            type_repr="int",
+            line=2,
+        )
+        # A third mis-extraction of the same name under a conflicting kind.
+        sym(
+            "c:degraded3",
+            "c:@N@Eigen",
+            13,
+            "plogical_shift_right",
+            "Eigen::plogical_shift_right",
+            type_repr="int",
+            line=3,
+        )
+        # Legitimate overloads: same name, both must stay cpp:function directives.
+        sym("c:@F@scale#d#", "c:@N@Eigen", 5, "scale", "Eigen::scale", signature="double scale(double f)", line=4)
+        sym("c:@F@scale#i#", "c:@N@Eigen", 5, "scale", "Eigen::scale", signature="int scale(int f)", line=5)
+        con.commit()
+    finally:
+        con.close()
+
+
 @pytest.fixture
 def collision_db(tmp_path: Path) -> Path:
     """Return an IR database whose symbols produce colliding page stems."""
     path = tmp_path / "collision.sqlite"
     _build_collision_db(path)
+    return path
+
+
+@pytest.fixture
+def degraded_db(tmp_path: Path) -> Path:
+    """Return an IR database holding same-name conflicting declarations."""
+    path = tmp_path / "degraded.sqlite"
+    _build_degraded_db(path)
     return path
 
 
