@@ -131,7 +131,30 @@ jobs:
             echo "benchmarks venv holds clangquill $actual, not the checkout build $CLANGQUILL_BUILT_VERSION — refusing to benchmark the wrong binary" >&2
             exit 1
           fi
-          uv run --no-sync --project benchmarks python benchmarks/benchmark.py \
+          # Sample memory and disk in the background: post-v0.8.1 runs have died
+          # with "runner received a shutdown signal" mid-benchmark, which on
+          # hosted runners usually means the VM was resource-killed. The samples
+          # are surfaced in the job summary below so the next failure says when
+          # and what was exhausted instead of nothing.
+          ( while true; do
+              echo "$(date -u +%H:%M:%S) mem_used_mb=$(free -m | awk '/Mem:/ {print $3}') disk_avail_mb=$(df -m --output=avail / | tail -1 | tr -d ' ')"
+              sleep 15
+            done > /tmp/resource-monitor.log 2>&1 &
+            echo "$!" > /tmp/resource-monitor.pid )
+          # -u keeps the harness's per-repo/per-stage progress lines unbuffered:
+          # python block-buffers stdout on a pipe, so a killed run used to leave
+          # no trace of how far it got in the CI log.
+          #
+          # nice -n 10 keeps the runner agent responsive: measuring the real
+          # binary saturates all four vCPUs continuously for ~20 minutes
+          # (parallel libclang parse, sphinx -j auto, doxygen all-threads),
+          # and three full runs in a row were torn down with "runner has
+          # received a shutdown signal" ~18-20 min in, while a short run of the
+          # same workload completes — consistent with the agent starving under
+          # sustained load. Deprioritising the benchmark only matters when
+          # something else (the agent) wants CPU, so on an otherwise-idle
+          # runner the measured numbers are unaffected.
+          nice -n 10 uv run --no-sync --project benchmarks python -u benchmarks/benchmark.py \
             --repos "$BENCH_REPOS" \
             --tools "$BENCH_TOOLS" \
             --repeat "$BENCH_REPEAT" \
@@ -139,6 +162,29 @@ jobs:
       - name: Publish results to job summary
         if: always()
         run: |
+          # The sampler has served its purpose once the benchmark step is over;
+          # stop it so it does not linger through the remaining steps.
+          if [ -f /tmp/resource-monitor.pid ]; then
+            kill "$(cat /tmp/resource-monitor.pid)" 2>/dev/null || true
+          fi
+          # Resource-monitor tail and kernel OOM traces first: when the runner
+          # is torn down mid-benchmark this is the evidence of what happened.
+          if [ -f /tmp/resource-monitor.log ]; then
+            {
+              echo '### Resource monitor (last 20 samples)'
+              echo '```'
+              tail -20 /tmp/resource-monitor.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if sudo dmesg 2>/dev/null | grep -iE 'out of memory|oom-kill' | tail -5 | grep -q .; then
+            {
+              echo '### Kernel OOM traces'
+              echo '```'
+              sudo dmesg | grep -iE 'out of memory|oom-kill' | tail -5
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           # The benchmark step may have failed before creating results/, so guard
           # the directory before scanning it (this always() step must not fail).
           if [ ! -d benchmarks/results ]; then

@@ -1017,6 +1017,34 @@ def main(argv: list[str] | None = None) -> int:
         "results": {},
     }
 
+    args.results_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    json_path = args.results_dir / f"{stamp}.json"
+    md_path = args.results_dir / f"{stamp}.md"
+
+    def atomic_write(path: Path, content: str) -> None:
+        """Write ``content`` to ``path`` via a sibling temp file and rename.
+
+        A checkpoint exists to survive the process being killed; an in-place
+        ``write_text`` truncates first, so a kill mid-write would corrupt the
+        very file meant to outlive it. The rename makes each write all-or-nothing.
+        """
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(path)
+
+    def checkpoint(markdown: str | None = None) -> None:
+        """Persist the (possibly partial) results gathered so far.
+
+        A full run takes long enough that an interrupted or killed process is a
+        real possibility; rewriting the report after every completed stage means
+        whatever finished survives, both as data and as a marker of how far the
+        run got before dying. ``markdown`` lets the final call reuse an
+        already-rendered report instead of rendering twice.
+        """
+        atomic_write(json_path, json.dumps(payload, indent=2))
+        atomic_write(md_path, markdown if markdown is not None else render_markdown(payload))
+
     for cfg in configs:
         print(f"\n=== {cfg.name} ===")
         ctx = prepare_repo(cfg, args.work_dir, fresh_clone=args.fresh_clone)
@@ -1036,14 +1064,10 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:
                 print(f"    ERROR in {stage}: {exc}", file=sys.stderr)
                 payload["results"][cfg.name][stage] = {"error": str(exc)}
+            checkpoint()
 
-    args.results_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    json_path = args.results_dir / f"{stamp}.json"
-    md_path = args.results_dir / f"{stamp}.md"
-    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     markdown = render_markdown(payload)
-    md_path.write_text(markdown, encoding="utf-8")
+    checkpoint(markdown)
 
     print("\n" + markdown)
     print(f"\nWrote {json_path}\n      {md_path}")
