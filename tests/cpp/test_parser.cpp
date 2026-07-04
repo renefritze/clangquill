@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <set>
 #include <string>
 #include <vector>
@@ -145,6 +147,58 @@ TEST_CASE("content_hash is deterministic across parses", "[parser]") {
   };
   CHECK(hash_of(a, "geo::Circle") == hash_of(b, "geo::Circle"));
   CHECK_FALSE(hash_of(a, "geo::Circle").empty());
+}
+
+TEST_CASE("file hash cache serves repeats and notices edits", "[parser]") {
+  // record_file keeps a process-wide (mtime, size) -> digest cache so a header
+  // shared by many umbrella batches is read and hashed once per run. The cache
+  // must replay identical rows for an unchanged file and re-hash an edited one.
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / "clangquill-hash-cache-test";
+  fs::create_directories(dir);
+  const fs::path header = dir / "cached.hpp";
+  {
+    std::ofstream out(header);
+    out << "/// v1\ninline int cached_value() { return 1; }\n";
+  }
+
+  auto file_row = [&](const model::ParsedModule& m) -> const model::SourceFile* {
+    for (const auto& f : m.files) {
+      if (f.path.find("cached.hpp") != std::string::npos) return &f;
+    }
+    return nullptr;
+  };
+
+  parser::ParseOptions opts;
+  model::ParsedModule first;
+  REQUIRE(parser::Parser(opts).parse_file(header.string(), first));
+  const auto* row1 = file_row(first);
+  REQUIRE(row1 != nullptr);
+  CHECK(row1->sha256.size() == 64);
+
+  // A separate parse of the unchanged file (fresh Parser and module, so the
+  // per-module dedup set cannot help) replays the identical row.
+  model::ParsedModule second;
+  REQUIRE(parser::Parser(opts).parse_file(header.string(), second));
+  const auto* row2 = file_row(second);
+  REQUIRE(row2 != nullptr);
+  CHECK(row2->sha256 == row1->sha256);
+  CHECK(row2->size_bytes == row1->size_bytes);
+
+  // Editing the file (different size, so the stat validation must miss even on
+  // filesystems with coarse mtimes) yields a fresh digest, not the cached one.
+  {
+    std::ofstream out(header);
+    out << "/// v2, edited\ninline int cached_value() { return 22; }\n";
+  }
+  model::ParsedModule third;
+  REQUIRE(parser::Parser(opts).parse_file(header.string(), third));
+  const auto* row3 = file_row(third);
+  REQUIRE(row3 != nullptr);
+  CHECK(row3->sha256 != row1->sha256);
+  CHECK(row3->size_bytes != row1->size_bytes);
+
+  fs::remove_all(dir);
 }
 
 namespace {
