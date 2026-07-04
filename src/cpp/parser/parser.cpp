@@ -4,10 +4,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
@@ -42,12 +44,55 @@ struct TuGuard {
   }
 };
 
+// One remembered digest of the process-wide content-hash cache below, valid
+// while the file's (mtime, size) stat is unchanged.
+struct CachedFileHash {
+  std::filesystem::file_time_type mtime;
+  std::uintmax_t size = 0;
+  std::string sha256;
+};
+
 // Reads a file and appends a SourceFile row (path, sha256, size). `seen` keys
 // the rows already present in the module so a file shared by many inclusions
-// is read and hashed once.
+// is read and hashed once per module.
+//
+// `seen` cannot deduplicate across the umbrella batches (each worker builds
+// its own module), so a header shared by every batch — the common prelude of
+// the whole project — was read and SHA-256-hashed once per batch: on a cold
+// abseil parse Sha256 alone was ~10 % of all instructions, more than any
+// single libclang function. A process-wide `path -> (mtime, size, digest)`
+// cache makes that one read+hash per process instead. The (mtime, size)
+// validation mirrors the fast-path the Python-side build cache already trusts
+// for exactly these files, so an edited file (changed stat) is re-hashed while
+// a long-lived process (the Sphinx extension) reuses digests across builds.
 void record_file(const std::string& path, model::ParsedModule& out,
                  std::unordered_set<std::string>& seen) {
   if (!seen.insert(path).second) return;
+
+  static std::mutex cache_mutex;
+  static std::unordered_map<std::string, CachedFileHash> cache;
+
+  std::error_code ec;
+  const std::filesystem::file_time_type mtime =
+      std::filesystem::last_write_time(path, ec);
+  std::uintmax_t stat_size = 0;
+  if (!ec) stat_size = std::filesystem::file_size(path, ec);
+  const bool stat_ok = !ec;
+
+  if (stat_ok) {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    auto it = cache.find(path);
+    if (it != cache.end() && it->second.mtime == mtime &&
+        it->second.size == stat_size) {
+      model::SourceFile file;
+      file.path = path;
+      file.sha256 = it->second.sha256;
+      file.size_bytes = static_cast<std::int64_t>(it->second.size);
+      out.files.push_back(std::move(file));
+      return;
+    }
+  }
+
   std::ifstream in(path, std::ios::binary);
   if (!in) return;
   std::ostringstream ss;
@@ -58,6 +103,13 @@ void record_file(const std::string& path, model::ParsedModule& out,
   file.path = path;
   file.sha256 = hash::sha256_hex(contents);
   file.size_bytes = static_cast<std::int64_t>(contents.size());
+  // Only remember the digest when the bytes read agree with the stat taken
+  // before the read; a file racing a concurrent edit is simply not cached and
+  // will be read again next time.
+  if (stat_ok && static_cast<std::uintmax_t>(contents.size()) == stat_size) {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    cache[path] = CachedFileHash{mtime, stat_size, file.sha256};
+  }
   out.files.push_back(std::move(file));
 }
 
