@@ -439,17 +439,18 @@ def write_sphinx_scaffold(ctx: RepoContext) -> None:
 
 
 def sphinx_argv(ctx: RepoContext, sphinx_cmd: list[str]) -> list[str]:
-    """Build the ``sphinx-build`` argv for the render stage (quiet, parallel).
+    """Build the ``sphinx-build`` argv for the render stage (quiet, serial).
 
-    Parallelism is capped at 2 workers rather than ``-j auto``: an incremental
-    Sphinx build loads the full pickled environment into the parent (~6.5 GB
-    resident for eigen's 1,700+ cpp-domain-heavy pages), and every forked read
-    worker materialises its own copy (~2.3 GB each measured). With ``-j auto``
-    on a 4-core/16 GB CI runner that peaked at 15.8 GB and the VM was
-    resource-killed mid-benchmark; two workers bound the peak at roughly
-    11 GB while keeping the render parallel.
+    Serial on purpose: an incremental Sphinx build loads the full pickled
+    environment into the parent (~5.4 GB resident for eigen's 1,700+
+    cpp-domain-heavy pages), and every ``-j`` fork then dirties — hence
+    copies — essentially the whole environment through Python refcounting,
+    so each worker costs ~a full environment regardless of the worker count.
+    Measured on a 4-core/16 GB CI runner: ``-j auto`` peaked at 15.8 GB and
+    ``-j 2`` still peaked at 15.9 GB, both getting the VM resource-killed
+    mid-benchmark; serial peaks at the parent alone and completes.
     """
-    return [*sphinx_cmd, "-b", "html", "-q", "-j", "2", str(ctx.sphinx_src), str(ctx.sphinx_out)]
+    return [*sphinx_cmd, "-b", "html", "-q", str(ctx.sphinx_src), str(ctx.sphinx_out)]
 
 
 def write_doxyfile(ctx: RepoContext, mode: str) -> Path:
