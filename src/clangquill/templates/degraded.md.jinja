@@ -1,0 +1,12 @@
+{# Fallback for a declaration that conflicts with one already emitted on this
+   page (same name, conflicting or duplicate non-overloadable kind — typically
+   the result of degraded extraction without the project's full include tree).
+   A plain code block keeps the declaration visible without registering a
+   duplicate C++ domain object, which Sphinx's cpp domain crashes on. #}
+{% import "partials/signature.md.jinja" as sig %}
+{% set comment = gen.comment(symbol) %}
+```cpp
+{{ sig.directive_argument(symbol) }}
+```
+
+{{ render_comment(comment) }}
