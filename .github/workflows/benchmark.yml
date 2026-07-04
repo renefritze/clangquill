@@ -136,10 +136,13 @@ jobs:
           # hosted runners usually means the VM was resource-killed. The samples
           # are surfaced in the job summary below so the next failure says when
           # and what was exhausted instead of nothing.
+          # tee'd into the step's own stdout as well as the file: a runner that
+          # is torn down mid-benchmark never runs the always() summary step, so
+          # the streamed copy in the live log is the only record that survives.
           ( while true; do
               echo "$(date -u +%H:%M:%S) mem_used_mb=$(free -m | awk '/Mem:/ {print $3}') disk_avail_mb=$(df -m --output=avail / | tail -1 | tr -d ' ')"
               sleep 15
-            done > /tmp/resource-monitor.log 2>&1 &
+            done | tee /tmp/resource-monitor.log &
             echo "$!" > /tmp/resource-monitor.pid )
           # -u keeps the harness's per-repo/per-stage progress lines unbuffered:
           # python block-buffers stdout on a pipe, so a killed run used to leave

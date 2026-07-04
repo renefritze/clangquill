@@ -567,6 +567,7 @@ def run_stage(
     for pass_idx in range(total_passes):
         recording = pass_idx >= warmup
         rep = pass_idx - warmup
+        print(f"    pass {pass_idx + 1}/{total_passes}", flush=True)
         reset_state(ctx)
 
         # -- cold ----------------------------------------------------------- #
@@ -583,12 +584,14 @@ def run_stage(
             mode = stage.split("-", 1)[1]
             argv, cwd = doxy_cmd(mode)
             out_dir = ctx.doxygen_out(mode)
+        print("      cold", flush=True)
         cold = measure(argv, cwd, _stage_log(ctx, stage, "cold", rep))
         cold_output = dir_stats(out_dir)
 
         # -- noop ----------------------------------------------------------- #
         if stage == "clangquill-sphinx":
             untimed(*myst_cmd(), tag=f"sphinx-noop-myst-{pass_idx}")
+        print("      noop", flush=True)
         noop = measure(argv, cwd, _stage_log(ctx, stage, "noop", rep)) if "noop" in scenarios else None
         noop_output = dir_stats(out_dir) if noop is not None else None
 
@@ -596,6 +599,7 @@ def run_stage(
         incr = None
         incr_output = None
         if "incremental" in scenarios:
+            print("      incremental", flush=True)
             patched = apply_patch(ctx)
             try:
                 if stage == "clangquill-sphinx":
@@ -610,6 +614,7 @@ def run_stage(
         leaf = None
         leaf_output = None
         if "incremental-leaf" in scenarios and ctx.config.leaf_patch_files:
+            print("      incremental-leaf", flush=True)
             # Reverting the wide patch above re-staled its targets, so re-sync
             # the cached state with an untimed rebuild first: this scenario must
             # measure the cost of the leaf edit alone. When the incremental
