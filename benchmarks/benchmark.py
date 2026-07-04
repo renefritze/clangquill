@@ -1017,6 +1017,22 @@ def main(argv: list[str] | None = None) -> int:
         "results": {},
     }
 
+    args.results_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    json_path = args.results_dir / f"{stamp}.json"
+    md_path = args.results_dir / f"{stamp}.md"
+
+    def checkpoint() -> None:
+        """Persist the (possibly partial) results gathered so far.
+
+        A full run takes long enough that an interrupted or killed process is a
+        real possibility; rewriting the report after every completed stage means
+        whatever finished survives, both as data and as a marker of how far the
+        run got before dying.
+        """
+        json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        md_path.write_text(render_markdown(payload), encoding="utf-8")
+
     for cfg in configs:
         print(f"\n=== {cfg.name} ===")
         ctx = prepare_repo(cfg, args.work_dir, fresh_clone=args.fresh_clone)
@@ -1036,14 +1052,10 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:
                 print(f"    ERROR in {stage}: {exc}", file=sys.stderr)
                 payload["results"][cfg.name][stage] = {"error": str(exc)}
+            checkpoint()
 
-    args.results_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    json_path = args.results_dir / f"{stamp}.json"
-    md_path = args.results_dir / f"{stamp}.md"
-    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    checkpoint()
     markdown = render_markdown(payload)
-    md_path.write_text(markdown, encoding="utf-8")
 
     print("\n" + markdown)
     print(f"\nWrote {json_path}\n      {md_path}")

@@ -131,7 +131,19 @@ jobs:
             echo "benchmarks venv holds clangquill $actual, not the checkout build $CLANGQUILL_BUILT_VERSION — refusing to benchmark the wrong binary" >&2
             exit 1
           fi
-          uv run --no-sync --project benchmarks python benchmarks/benchmark.py \
+          # Sample memory and disk in the background: post-v0.8.1 runs have died
+          # with "runner received a shutdown signal" mid-benchmark, which on
+          # hosted runners usually means the VM was resource-killed. The samples
+          # are surfaced in the job summary below so the next failure says when
+          # and what was exhausted instead of nothing.
+          ( while true; do
+              echo "$(date -u +%H:%M:%S) mem_used_mb=$(free -m | awk '/Mem:/ {print $3}') disk_avail_mb=$(df -m --output=avail / | tail -1 | tr -d ' ')"
+              sleep 15
+            done > /tmp/resource-monitor.log 2>&1 & )
+          # -u keeps the harness's per-repo/per-stage progress lines unbuffered:
+          # python block-buffers stdout on a pipe, so a killed run used to leave
+          # no trace of how far it got in the CI log.
+          uv run --no-sync --project benchmarks python -u benchmarks/benchmark.py \
             --repos "$BENCH_REPOS" \
             --tools "$BENCH_TOOLS" \
             --repeat "$BENCH_REPEAT" \
@@ -139,6 +151,24 @@ jobs:
       - name: Publish results to job summary
         if: always()
         run: |
+          # Resource-monitor tail and kernel OOM traces first: when the runner
+          # is torn down mid-benchmark this is the evidence of what happened.
+          if [ -f /tmp/resource-monitor.log ]; then
+            {
+              echo '### Resource monitor (last 20 samples)'
+              echo '```'
+              tail -20 /tmp/resource-monitor.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if sudo dmesg 2>/dev/null | grep -iE 'out of memory|oom-kill' | tail -5 | grep -q .; then
+            {
+              echo '### Kernel OOM traces'
+              echo '```'
+              sudo dmesg | grep -iE 'out of memory|oom-kill' | tail -5
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           # The benchmark step may have failed before creating results/, so guard
           # the directory before scanning it (this always() step must not fail).
           if [ ! -d benchmarks/results ]; then
