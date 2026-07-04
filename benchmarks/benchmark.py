@@ -439,8 +439,18 @@ def write_sphinx_scaffold(ctx: RepoContext) -> None:
 
 
 def sphinx_argv(ctx: RepoContext, sphinx_cmd: list[str]) -> list[str]:
-    """Build the ``sphinx-build`` argv for the render stage (quiet, parallel)."""
-    return [*sphinx_cmd, "-b", "html", "-q", "-j", "auto", str(ctx.sphinx_src), str(ctx.sphinx_out)]
+    """Build the ``sphinx-build`` argv for the render stage (quiet, serial).
+
+    Serial on purpose: an incremental Sphinx build loads the full pickled
+    environment into the parent (~5.4 GB resident for eigen's 1,700+
+    cpp-domain-heavy pages), and every ``-j`` fork then dirties — hence
+    copies — essentially the whole environment through Python refcounting,
+    so each worker costs ~a full environment regardless of the worker count.
+    Measured on a 4-core/16 GB CI runner: ``-j auto`` peaked at 15.8 GB and
+    ``-j 2`` still peaked at 15.9 GB, both getting the VM resource-killed
+    mid-benchmark; serial peaks at the parent alone and completes.
+    """
+    return [*sphinx_cmd, "-b", "html", "-q", str(ctx.sphinx_src), str(ctx.sphinx_out)]
 
 
 def write_doxyfile(ctx: RepoContext, mode: str) -> Path:
@@ -567,6 +577,7 @@ def run_stage(
     for pass_idx in range(total_passes):
         recording = pass_idx >= warmup
         rep = pass_idx - warmup
+        print(f"    pass {pass_idx + 1}/{total_passes}", flush=True)
         reset_state(ctx)
 
         # -- cold ----------------------------------------------------------- #
@@ -583,12 +594,14 @@ def run_stage(
             mode = stage.split("-", 1)[1]
             argv, cwd = doxy_cmd(mode)
             out_dir = ctx.doxygen_out(mode)
+        print("      cold", flush=True)
         cold = measure(argv, cwd, _stage_log(ctx, stage, "cold", rep))
         cold_output = dir_stats(out_dir)
 
         # -- noop ----------------------------------------------------------- #
         if stage == "clangquill-sphinx":
             untimed(*myst_cmd(), tag=f"sphinx-noop-myst-{pass_idx}")
+        print("      noop", flush=True)
         noop = measure(argv, cwd, _stage_log(ctx, stage, "noop", rep)) if "noop" in scenarios else None
         noop_output = dir_stats(out_dir) if noop is not None else None
 
@@ -596,6 +609,7 @@ def run_stage(
         incr = None
         incr_output = None
         if "incremental" in scenarios:
+            print("      incremental", flush=True)
             patched = apply_patch(ctx)
             try:
                 if stage == "clangquill-sphinx":
@@ -610,6 +624,7 @@ def run_stage(
         leaf = None
         leaf_output = None
         if "incremental-leaf" in scenarios and ctx.config.leaf_patch_files:
+            print("      incremental-leaf", flush=True)
             # Reverting the wide patch above re-staled its targets, so re-sync
             # the cached state with an untimed rebuild first: this scenario must
             # measure the cost of the leaf edit alone. When the incremental
