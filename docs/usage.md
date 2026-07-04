@@ -64,7 +64,8 @@ Every knob is a `clangquill_*` config value mirroring a field of
 (per-kind overrides), `clangquill_include_undocumented`,
 `clangquill_comment_parser`, `clangquill_group_by` (`symbol`, `file`, `class` or
 `namespace` — the last builds a browsable index → namespace → per-symbol
-hierarchy) and the
+hierarchy; recommended for libraries rooted in a single namespace, which would
+otherwise collapse onto one giant page) and the
 `clangquill_toctree_maxdepth` / `clangquill_root_document` toctree options. The
 generated `cpp:` domain objects appear in `objects.inv` and cross-reference like
 any hand-written page.

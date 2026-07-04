@@ -119,6 +119,13 @@ class RepoConfig:
     # process the identical file set.
     doxygen_recursive: bool = True
     doxygen_file_patterns: list[str] = field(default_factory=list)
+    # Page partitioning passed to ``clangquill build --group-by``. Empty keeps
+    # the tool default (``symbol``). Namespace-rooted libraries should set
+    # ``namespace`` (or ``class``): with the default, a single root namespace
+    # collapses the whole subtree onto one page — on eigen, one page held 84 %
+    # of the output bytes, dominating the render, serialising Sphinx's read
+    # phase, and being re-rendered on every symbol change.
+    group_by: str = ""
     patch_files: list[str] = field(default_factory=list)
 
     @classmethod
@@ -139,6 +146,7 @@ class RepoConfig:
             doxygen_input=list(data.get("doxygen_input", [])),
             doxygen_recursive=bool(data.get("doxygen_recursive", True)),
             doxygen_file_patterns=list(data.get("doxygen_file_patterns", [])),
+            group_by=data.get("group_by", ""),
             patch_files=list(patch.get("files", [])),
         )
 
@@ -373,6 +381,8 @@ def clangquill_build_argv(ctx: RepoContext, clangquill_cmd: list[str]) -> list[s
         argv += ["-D", define]
     for arg in cfg.compile_args:
         argv += ["--compile-arg", arg]
+    if cfg.group_by:
+        argv += ["--group-by", cfg.group_by]
     argv += ["--cache-dir", str(ctx.cache_dir)]
     return argv
 

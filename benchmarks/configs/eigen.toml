@@ -12,6 +12,13 @@ include_dirs = ["."]
 inputs = ["Eigen/src/Core/**/*.h"]
 doxygen_input = ["Eigen/src/Core"]
 doxygen_file_patterns = ["*.h"]
+# Everything lives under the single `Eigen` namespace: the default
+# group_by="symbol" collapses the whole subtree onto one page (84 % of the
+# output bytes in one file), which dominates the render, serialises Sphinx's
+# read phase, and re-renders on every symbol change. Namespace grouping splits
+# it into balanced pages — the recommended setting for namespace-rooted
+# libraries.
+group_by = "namespace"
 
 [patch]
 files = ["Eigen/src/Core/Matrix.h"]

@@ -113,6 +113,9 @@ inputs = ["Eigen/src/Core/**/*.h"]  # clangquill globs (relative to repo root)
 doxygen_input = ["Eigen/src/Core"]  # Doxygen INPUT dirs, same tree as the globs
 doxygen_recursive = true            # Doxygen RECURSIVE; false when the glob is single-level
 doxygen_file_patterns = ["*.h"]     # Doxygen FILE_PATTERNS; pin to the glob's extension
+group_by = "namespace"              # clangquill --group-by (empty = tool default "symbol";
+                                    # set "namespace" for namespace-rooted libraries so one
+                                    # root namespace doesn't collapse onto a single huge page)
 [patch]
 files = ["Eigen/src/Core/Matrix.h"]  # deterministic incremental-edit targets
 ```
