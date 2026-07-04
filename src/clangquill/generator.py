@@ -19,7 +19,7 @@ import hashlib
 import os
 import re
 from dataclasses import dataclass, field
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,6 +29,8 @@ from clangquill.store import AccessKind, RefKind, SymbolKind
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
+
+    from jinja2 import Template
 
     from clangquill.comments import CommentModel
     from clangquill.store import Enumerator, Group, Parameter, Reference, SourceFile, Store, Symbol
@@ -232,6 +234,31 @@ def _strip_recovery_defaults(signature: str) -> str:
     return "".join(out)
 
 
+#: A ``<...>`` template-argument list allowing one level of nested ``<...>``
+#: (covers the injected-class-name of the documented constructors, e.g.
+#: ``Foo<Bar<X>>``). Used as an f-string fragment of :func:`_ctor_template_id_re`.
+_BALANCED_ANGLES = r"<(?:[^<>]|<[^<>]*>)*>"
+
+# The two signature patterns below are built per *symbol name*, so compiling
+# them inline made every symbol render pay an re.compile — ~1,200 compiles on
+# an eigen render — while thrashing the re module's own 512-entry cache with
+# distinct names. Memoising by name keeps one compiled pattern per distinct
+# spelling; the bound protects a long-lived process (the Sphinx extension)
+# from unbounded growth while comfortably holding a large project's names.
+
+
+@lru_cache(maxsize=4096)
+def _ctor_template_id_re(name: str) -> re.Pattern[str]:
+    """Pattern matching ``name``'s injected-class-name template-id before ``(``."""
+    return re.compile(rf"(?<![\w:]){re.escape(name)}\s*{_BALANCED_ANGLES}\s*(?=\()")
+
+
+@lru_cache(maxsize=4096)
+def _spelling_before_call_re(spelling: str) -> re.Pattern[str]:
+    """Pattern matching the bare ``spelling`` right before its parameter list."""
+    return re.compile(rf"(?<![\w:]){re.escape(spelling)}(?=\s*\()")
+
+
 def _slug(name: str) -> str:
     """Turn a qualified name into a filesystem-safe page stem."""
     slug = _SLUG_RE.sub("_", name).strip("_")
@@ -350,6 +377,14 @@ class Generator:
         # :meth:`group_stem`): dedup can suffix the natural slug, and the
         # subgroup links templates render must point at the planned page.
         self._group_stems: dict[str, str] = {}
+        # Template objects (and the two partial macros below) are immutable for
+        # the lifetime of the environment, but Environment.get_template — and
+        # Template.module, which re-evaluates the module body on every access —
+        # ran once per symbol render (~14k lookups on an eigen render). They are
+        # memoised here instead; see :meth:`_template`.
+        self._template_cache: dict[str, Template] = {}
+        self._comment_macro: Callable[[CommentModel | None], object] | None = None
+        self._fields_macro: Callable[[CommentModel], object] | None = None
         loaders: list[FileSystemLoader | PackageLoader] = []
         if template_dirs:
             loaders.append(FileSystemLoader([str(d) for d in template_dirs]))
@@ -365,6 +400,19 @@ class Generator:
         self._install_context()
 
     # -- environment wiring ---------------------------------------------------
+
+    def _template(self, name: str) -> Template:
+        """Return template ``name``, memoised for this generator's lifetime.
+
+        The environment's loaders never change after construction, so a looked-up
+        template object is stable; going through :meth:`jinja2.Environment.get_template`
+        for every symbol render is pure constant-factor overhead on large renders.
+        """
+        template = self._template_cache.get(name)
+        if template is None:
+            template = self.env.get_template(name)
+            self._template_cache[name] = template
+        return template
 
     def _install_context(self) -> None:
         """Expose the helpers/globals templates rely on."""
@@ -590,11 +638,6 @@ class Generator:
                 return f"{base} {symbol.qualified_name}{extent.group().strip()}".strip()
         return f"{type_repr} {symbol.qualified_name}".strip()
 
-    #: A ``<...>`` template-argument list allowing one level of nested ``<...>``
-    #: (covers the injected-class-name of the documented constructors, e.g.
-    #: ``Foo<Bar<X>>``). Used as an f-string fragment, so it is not pre-compiled.
-    _BALANCED_ANGLES = r"<(?:[^<>]|<[^<>]*>)*>"
-
     def _strip_injected_template_id(self, signature: str, symbol: Symbol) -> str:
         """Drop the injected-class-name template-id on a ctor/dtor.
 
@@ -610,8 +653,7 @@ class Generator:
         name = symbol.spelling.lstrip("~")
         if not name:
             return signature
-        pattern = re.compile(rf"(?<![\w:]){re.escape(name)}\s*{self._BALANCED_ANGLES}\s*(?=\()")
-        return pattern.sub(name, signature, count=1)
+        return _ctor_template_id_re(name).sub(name, signature, count=1)
 
     def _qualify(self, signature: str, symbol: Symbol) -> str:
         """Inject the qualified name into a bare pretty-printed signature.
@@ -627,8 +669,7 @@ class Generator:
         head, qualified = self._member_qualifier(symbol)
         if qualified == symbol.spelling and not head:
             return signature
-        pattern = re.compile(rf"(?<![\w:]){re.escape(symbol.spelling)}(?=\s*\()")
-        new, count = pattern.subn(qualified, signature, count=1)
+        new, count = _spelling_before_call_re(symbol.spelling).subn(qualified, signature, count=1)
         if not count:
             return signature
         return f"{head}{new}" if head else new
@@ -728,15 +769,19 @@ class Generator:
         ``None`` (an undocumented symbol) renders a clear, present placeholder
         rather than nothing so the symbol still appears in the output.
         """
-        macro = self.env.get_template("partials/comment-block.md.jinja").module.body
-        return str(macro(model)).strip()
+        if self._comment_macro is None:
+            # ``Template.module`` re-evaluates the module body on every access,
+            # so the macro itself is cached, not just the template.
+            self._comment_macro = self._template("partials/comment-block.md.jinja").module.body
+        return str(self._comment_macro(model)).strip()
 
     def field_list(self, model: CommentModel | None) -> str:
         """Render the Sphinx field list (``:param:``, ``:returns:`` …) of a comment."""
         if model is None:
             return ""
-        macro = self.env.get_template("partials/param-table.md.jinja").module.fields
-        return str(macro(model)).strip()
+        if self._fields_macro is None:
+            self._fields_macro = self._template("partials/param-table.md.jinja").module.fields
+        return str(self._fields_macro(model)).strip()
 
     # -- rendering ------------------------------------------------------------
 
@@ -745,7 +790,7 @@ class Generator:
 
         ``level`` is the Markdown heading depth used for section symbols.
         """
-        template = self.env.get_template(f"{self.template_name(symbol)}.md.jinja")
+        template = self._template(f"{self.template_name(symbol)}.md.jinja")
         return _normalize(template.render(symbol=symbol, level=level))
 
     def render_file(self, source_file: SourceFile, *, level: int = 1) -> str:
@@ -756,7 +801,7 @@ class Generator:
         scope), not just global roots — otherwise a file holding only
         namespace-nested symbols would render nothing.
         """
-        template = self.env.get_template("file.md.jinja")
+        template = self._template("file.md.jinja")
         previous = self._file_scope
         self._file_scope = source_file.id
         try:
@@ -768,7 +813,7 @@ class Generator:
 
     def render_group(self, group: Group, *, level: int = 1) -> str:
         """Render a single documentation group page (members + subgroups)."""
-        template = self.env.get_template("group.md.jinja")
+        template = self._template("group.md.jinja")
         return _normalize(template.render(group=group, level=level))
 
     def render_namespace_page(self, symbol: Symbol, members: Sequence[Symbol], *, level: int = 1) -> str:
@@ -780,7 +825,7 @@ class Generator:
         namespaces are emitted as separate pages, so listing them here too would
         duplicate their content.
         """
-        template = self.env.get_template("namespace-page.md.jinja")
+        template = self._template("namespace-page.md.jinja")
         return _normalize(template.render(symbol=symbol, symbols=members, level=level))
 
     def render_namespace_hub(
@@ -802,7 +847,7 @@ class Generator:
         """
         comment = self.comment(symbol) if symbol is not None else None
         name = (symbol.qualified_name if symbol is not None else "") or "(global namespace)"
-        template = self.env.get_template("namespace-hub.md.jinja")
+        template = self._template("namespace-hub.md.jinja")
         return _normalize(template.render(name=name, comment=comment, children=children, level=level))
 
     def render_member_page(self, title: str, members: Sequence[Symbol], *, level: int = 1) -> str:
@@ -813,7 +858,7 @@ class Generator:
         MyST heading text (e.g. ``Function `geo::scale``` or ``Operators in
         `geo```) and each member renders one level deeper.
         """
-        template = self.env.get_template("member-page.md.jinja")
+        template = self._template("member-page.md.jinja")
         return _normalize(template.render(title=title, symbols=members, level=level))
 
     def render_pages(self, *, group_by: str = "symbol", reserved_stems: Sequence[str] = ()) -> list[RenderedPage]:
@@ -877,7 +922,7 @@ class Generator:
         hierarchical grouping they are reached through a parent's toctree, so the
         root index lists only the top namespaces rather than every page.
         """
-        index = self.env.get_template("index.md.jinja")
+        index = self._template("index.md.jinja")
         entries = [(p.stem, p.label) for p in pages if getattr(p, "top_level", True)]
         return index.render(pages=entries, maxdepth=toctree_maxdepth)
 
