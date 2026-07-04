@@ -144,7 +144,17 @@ jobs:
           # -u keeps the harness's per-repo/per-stage progress lines unbuffered:
           # python block-buffers stdout on a pipe, so a killed run used to leave
           # no trace of how far it got in the CI log.
-          uv run --no-sync --project benchmarks python -u benchmarks/benchmark.py \
+          #
+          # nice -n 10 keeps the runner agent responsive: measuring the real
+          # binary saturates all four vCPUs continuously for ~20 minutes
+          # (parallel libclang parse, sphinx -j auto, doxygen all-threads),
+          # and three full runs in a row were torn down with "runner has
+          # received a shutdown signal" ~18-20 min in, while a short run of the
+          # same workload completes — consistent with the agent starving under
+          # sustained load. Deprioritising the benchmark only matters when
+          # something else (the agent) wants CPU, so on an otherwise-idle
+          # runner the measured numbers are unaffected.
+          nice -n 10 uv run --no-sync --project benchmarks python -u benchmarks/benchmark.py \
             --repos "$BENCH_REPOS" \
             --tools "$BENCH_TOOLS" \
             --repeat "$BENCH_REPEAT" \
