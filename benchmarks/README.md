@@ -26,12 +26,11 @@ For every `(repo, stage)` pair, four scenarios are timed:
   Skipped for configs without `patch.leaf_files`.
 
 ClangQuill's incremental cache (only active with `--cache-dir`) makes *noop*
-cheap — the parse is skipped entirely. *incremental* re-parses only the
-translation units whose include closure contains the patched file and rewrites
-only the changed pages. Note the configured patch targets are widely-included
-headers, so the stale set can legitimately approach the whole module. Doxygen
-has no parse cache and re-parses on every run, which is exactly the contrast
-the benchmark surfaces.
+cheap — the parse is skipped entirely. Both incremental scenarios re-parse only
+the translation units whose include closure contains the patched file and
+rewrite only the changed pages; together they bracket the cache's behaviour
+between the worst case and the everyday edit. Doxygen has no parse cache and
+re-parses on every run, which is exactly the contrast the benchmark surfaces.
 
 ## Prerequisites
 
