@@ -19,7 +19,7 @@ jobs:
             cmake ninja-build libclang-dev libsqlite3-dev \
             nlohmann-json3-dev catch2
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v6.3.0
         with:
           python-version: '3.13'
       - name: Install nanobind (build-time dependency)
