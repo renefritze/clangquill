@@ -6,5 +6,6 @@ Design decisions and notes for contributors.
 :maxdepth: 1
 
 benchmark-methodology
+performance-analysis
 adr-0001-libclang-sourcing
 ```
